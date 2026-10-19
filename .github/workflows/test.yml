@@ -1,0 +1,30 @@
+name: tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0  # setup-uv publishes exact versions only (no floating v10 tag)
+      - run: uv sync --locked
+      - run: uv run ruff check
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0  # setup-uv publishes exact versions only (no floating v10 tag)
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run coverage run -m pytest -q
+      # The 85 % rule is enforced on one reference job: POSIX-only and Windows-only tests make the figure
+      # differ per OS. Every other job still runs every test.
+      - if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+        run: uv run coverage report

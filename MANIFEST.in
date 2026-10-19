@@ -1,0 +1,6 @@
+# the sdist carries the tests with their shared helper, so they run from it
+include tests/*.py
+include bin/sessioncoach bin/kit
+include CHANGELOG.md CONTRIBUTING.md SECURITY.md
+recursive-include contrib *
+recursive-include docs/screenshots *.png

@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sessioncoach</title>
+<meta name="kit-token" content="__KIT_TOKEN__">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect x=%272%27 y=%278%27 width=%273%27 height=%276%27 rx=%271%27 fill=%27%232a78d6%27/%3E%3Crect x=%276.5%27 y=%274%27 width=%273%27 height=%2710%27 rx=%271%27 fill=%27%232a78d6%27/%3E%3Crect x=%2711%27 y=%271%27 width=%273%27 height=%2713%27 rx=%271%27 fill=%27%23eb6834%27/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f4f3f0; --surface-1: #fcfcfb; --border: #e3e1dc;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --grid: #ecebe7; --accent: #2a78d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; --other: #a3a29c;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2b;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --grid: #262624; --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #6b6a64;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211; --surface-1: #1a1a19; --border: #2e2e2b;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --grid: #262624; --accent: #3987e5;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #6b6a64;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 16px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface-1); color: var(--text-secondary); padding: 6px 12px; cursor: pointer; font: inherit; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+select, .btn { font: inherit; color: var(--text-primary); background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; }
+.btn { cursor: pointer; }
+.spacer { flex: 1; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.tile .label { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.tile .value { font-size: 28px; font-weight: 650; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.tile .note { color: var(--text-muted); font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-secondary); }
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+.desc { color: var(--text-secondary); font-size: 13px; margin: 0 0 10px; }
+section { margin-bottom: 16px; }
+.recs { display: grid; gap: 12px; }
+.rec { display: grid; grid-template-columns: 34px 1fr auto; gap: 4px 12px; align-items: start; }
+.rec .num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 650; }
+.rec h3 { margin: 2px 0 4px; font-size: 15px; }
+.rec dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; font-size: 13px; }
+.rec dt { color: var(--text-muted); }
+.rec dd { margin: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
+.rec > div, .rec dl { min-width: 0; }
+.rec .saving { text-align: right; }
+.rec .saving b { font-size: 18px; font-variant-numeric: tabular-nums; display: block; }
+.rec .saving span { font-size: 11px; color: var(--text-muted); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } .rec { grid-template-columns: 30px 1fr; } .rec .saving { grid-column: 2; text-align: left; } }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-secondary); margin: 6px 0 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+svg text { fill: var(--text-muted); font-size: 11px; }
+.chart { position: relative; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; min-width: 160px; z-index: 5; }
+.tip .row { display: flex; justify-content: space-between; gap: 12px; }
+.tip .row i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--text-secondary); font-weight: 600; }
+td.n, th.n { text-align: right; }
+details { margin-top: 8px; }
+summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-0); border: 1px solid var(--border);
+  border-radius: 6px; padding: 1px 6px; color: var(--text-secondary); }
+.repro { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
+.empty { color: var(--text-muted); padding: 12px 0; }
+.scroll { overflow-x: auto; }
+.filters select { max-width: 100%; text-overflow: ellipsis; }
+.st-sec { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; min-width: 0; }
+.st-sec legend { padding: 0 6px; font-weight: 600; font-size: 13px; }
+.st-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 6px 0; }
+.st-row label { display: inline-flex; align-items: center; gap: 6px; }
+.st-row .st-name { min-width: 190px; color: var(--text-secondary); }
+.st-row input[type=text], .st-row input[type=number], .st-row input[type=time], .st-row select { font: inherit; color: var(--text-primary);
+  background: var(--surface-0); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; max-width: 100%; }
+.st-row input[type=text] { width: 150px; } .st-row input[type=number] { width: 120px; }
+.st-hint { color: var(--text-muted); font-size: 12px; margin: 0 0 4px; }
+.st-state { font-size: 12px; color: var(--text-muted); }
+.st-msg { padding: 8px 10px; border-radius: 8px; margin: 0 0 10px; border: 1px solid var(--border); overflow-wrap: anywhere; }
+.st-msg.ok { border-color: var(--good); } .st-msg.err { border-color: var(--critical); }
+.st-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn[disabled] { opacity: .55; cursor: default; }
+pre.diff { margin: 4px 0 10px; padding: 8px 0; background: var(--surface-0); border: 1px solid var(--border); border-radius: 8px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; }
+pre.diff span { display: block; padding: 0 10px; white-space: pre; min-width: max-content; }
+pre.diff .add { background: color-mix(in srgb, var(--good) 20%, transparent); }
+pre.diff .del { background: color-mix(in srgb, var(--critical) 20%, transparent); }
+pre.diff .hdr { color: var(--text-muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="demo-banner" role="status" style="display:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;border:1px solid var(--warning);color:var(--text-primary);font-weight:600"></div>
+  <header>
+    <h1>sessioncoach</h1>
+    <span class="sub" data-i18n="tagline"></span>
+    <span class="badge" id="anon-badge" style="display:none"></span>
+  </header>
+
+  <div class="filters" role="group">
+    <div class="seg" id="period"></div>
+    <select id="tenant" aria-label="tenant"></select>
+    <select id="project" aria-label="project"></select>
+    <select id="account" aria-label="account"></select>
+    <span class="spacer"></span>
+    <button class="btn" id="settings-btn" type="button" aria-expanded="false" aria-controls="settings-card"></button>
+    <button class="btn" id="anon" type="button" aria-pressed="false"></button>
+    <button class="btn" id="lang" type="button">EN</button>
+    <button class="btn" id="theme" type="button" aria-label="theme">◐</button>
+  </div>
+
+  <section class="card" id="review-card" style="display:none">
+    <h2 id="review-title"></h2>
+    <p class="desc" data-i18n="rv_desc"></p>
+    <div class="recs" id="review-tip" style="margin-bottom:12px"></div>
+    <div class="tiles" id="review-tiles" style="margin-bottom:8px"></div>
+    <div class="scroll" id="review-sessions"></div>
+    <div class="repro" id="review-repro"></div>
+  </section>
+
+  <section class="card" id="day-card">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+      <h2 data-i18n="day_title"></h2>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="btn" id="day-prev" type="button" aria-label="previous day">‹</button>
+        <input type="date" id="day-date" class="btn" style="padding:5px 8px">
+        <button class="btn" id="day-next" type="button" aria-label="next day">›</button>
+        <button class="btn" id="refresh" type="button" data-i18n="refresh"></button>
+      </div>
+    </div>
+    <p class="desc" id="day-fresh"></p>
+    <div class="tiles" id="day-tiles" style="margin-bottom:8px"></div>
+    <div class="chart" id="day-chart"></div>
+    <div class="legend" id="day-legend"></div>
+    <div class="grid2" style="margin-top:12px">
+      <div class="scroll" id="day-accounts"></div>
+      <div class="scroll" id="day-projects"></div>
+    </div>
+    <div class="repro" id="day-repro"></div>
+  </section>
+
+  <section class="card" id="alerts-card">
+    <h2 data-i18n="al_title"></h2>
+    <p class="desc" data-i18n="al_desc"></p>
+    <div id="alerts-summary" style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px"></div>
+    <div class="scroll" id="alerts-events"></div>
+    <h3 style="font-size:14px;margin:14px 0 6px" data-i18n="al_missed_title"></h3>
+    <p class="desc" id="alerts-missed-desc"></p>
+    <div class="scroll" id="alerts-missed"></div>
+    <div class="repro" id="alerts-repro"></div>
+  </section>
+
+  <section class="card" id="limits-card">
+    <h2 data-i18n="limits_title"></h2>
+    <p class="desc" data-i18n="limits_desc"></p>
+    <div id="limits"></div>
+  </section>
+
+  <h2 style="margin:20px 0 8px" data-i18n="period_title"></h2>
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2 data-i18n="recs_title"></h2>
+    <p class="desc" data-i18n="recs_desc"></p>
+    <div class="recs" id="recs"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="weekly_title"></h2>
+    <p class="desc" data-i18n="weekly_desc"></p>
+    <div class="chart" id="weekly"></div>
+    <div class="legend" id="weekly-legend"></div>
+    <details><summary data-i18n="show_table"></summary><div class="scroll" id="weekly-table"></div></details>
+    <div class="repro" id="weekly-repro"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2 data-i18n="split_title"></h2>
+      <p class="desc" data-i18n="split_desc"></p>
+      <div class="chart" id="split"></div>
+      <p class="desc" id="split-cache"></p>
+      <details><summary data-i18n="show_table"></summary><div id="split-table"></div></details>
+    </section>
+    <section class="card">
+      <h2 data-i18n="models_title"></h2>
+      <p class="desc" data-i18n="models_desc"></p>
+      <div class="chart" id="models"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2 data-i18n="projects_title"></h2>
+    <div class="scroll" id="projects"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="accounts_title"></h2>
+    <p class="desc" data-i18n="accounts_desc"></p>
+    <div class="scroll" id="accounts"></div>
+    <h3 style="font-size:14px;margin:16px 0 2px" data-i18n="alignment_title"></h3>
+    <p class="desc" data-i18n="alignment_desc"></p>
+    <div class="scroll" id="alignment"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="subagents_title"></h2>
+    <p class="desc" data-i18n="subagents_desc"></p>
+    <div class="scroll" id="subagents"></div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="verify_title"></h2>
+    <div id="verify"></div>
+  </section>
+  <section class="card" id="settings-card" style="display:none">
+    <h2 data-i18n="st_title"></h2>
+    <p class="desc" data-i18n="st_desc"></p>
+    <div id="st-msg" role="status"></div>
+    <div id="st-body"></div>
+    <div id="st-diff"></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+const I18N = {
+  es: {
+    tagline: "Medición honesta de Claude Code · local, nada sale de esta máquina",
+    limits_title: "Límites del plan y alertas", limits_desc: "Porcentaje de la ventana de 5 h y del límite semanal, tal como lo informa Claude Code. Te avisa por notificación al cruzar umbrales o si a este ritmo los agotarías antes del reinicio.",
+    no_samples: "Aún no hay muestras. Instala la línea de estado: sessioncoach statusline-install (se encadena a la actual, sin reemplazarla).",
+    w5: "Ventana de 5 h", w7: "Límite semanal", resets: "se reinicia", pace_warn: "a este ritmo llegas al 100 % hacia las {e}",
+    eating: "Qué se está comiendo la ventana actual", by_project: "Por proyecto", by_driver: "Por causa", by_session: "Por sesión",
+    drv_main_cache_read: "Releer contexto (caché)", drv_main_other: "Resto del hilo principal", drv_subagents: "Subagentes",
+    drv_cache_rewrite_after_idle: "Reescribir caché tras pausa", budgets: "Presupuestos (equivalente API)", no_budgets: "Sin presupuestos. Defínelos en la carpeta de datos, alerts.json.",
+    sample_at: "muestra de", thresholds_txt: "Umbrales de aviso", projection: "Proyección a fin de mes",
+    anon_on: "Anónimo: sí", anon_off: "Anónimo: no", anon_badge: "Modo anónimo · nombres sustituidos por seudónimos",
+    rv_title: "Repaso del {day}", rv_desc: "El último día con actividad frente al anterior: qué salió caro, sesión por sesión, y un cambio para hoy. Usa solo los números ya guardados (no gasta tokens). Hora, días y canales: alerts.json → review (en la carpeta de datos).",
+    rv_none: "Nada caro que destacar en ese día.", rv_today: "Para hoy",
+    rv_R1: "No retomes una sesión grande tras caducar la caché (pausa de más de {ttl}): abre una nueva con un traspaso. Ese día, {n} reanudaciones reescribieron caché por ≈ {usd}.",
+    rv_R16: "Una sesión por tarea y /compact al cerrar cada fase. Los turnos con más de {k}k tokens de contexto costaron ≈ {usd}.",
+    rv_R3: "Lanza los subagentes de búsqueda en Sonnet (CLAUDE_CODE_SUBAGENT_MODEL=sonnet). En Opus costaron ≈ {usd}.",
+    rv_MIX: "Una sesión por proyecto: {n} sesiones trabajaron en más de un proyecto o empresa (≈ {usd} en total).",
+    rv_total: "Total del día", rv_resumes: "Reanudaciones con caché caducada", rv_long: "Turnos de contexto largo",
+    rv_opus: "Subagentes en Opus", rv_mixed: "Sesiones que mezclan proyectos", rv_vs: "vs {d}", rv_session: "Sesión",
+    rv_max_ctx: "Contexto máx.", rv_mix_col: "Mezcla", rv_mix_tenant: "otra empresa", rv_mix_project: "otro proyecto",
+    day_title: "Día", period_title: "Periodo", refresh: "Actualizar", refreshing: "Actualizando…",
+    today: "Hoy", that_day: "Este día", prev_day: "Día anterior", same_time: "Día anterior a esta hora",
+    so_far: "hasta ahora", data_from: "Datos de la última ingesta: {ago}. El coste de hoy es casi todo estimado hasta que Claude Code escriba su registro de coste.",
+    min_ago: "hace {n} min", h_ago: "hace {n} h", account: "Cuenta", company: "Empresa", all_accounts: "Todas las cuentas",
+    delta: "Δ", accounts_title: "Cuentas de Claude", accounts_desc: "Cada cuenta está vinculada a una empresa. «Otra empresa» es el gasto de proyectos de otra empresa hecho con esa cuenta.",
+    other_company: "Otra empresa", hour: "Hora", cum: "Acumulado",
+    fee_period: "Cuota del periodo", value_x: "Valor / cuota", fee_day: "Cuota diaria", eq: "equiv. API",
+    paid_note: "Los importes son equivalente API: el valor de lo que consumiste a precio de lista. Lo que pagas es la cuota fija del plan{fee}; solo se factura aparte si la cuenta tiene activado el uso extra.",
+    paid_fee: " (≈ {fee} al día)", extra_on: "⚠ Uso extra de pago ACTIVADO en «{acc}»: lo que pase del límite del plan se factura aparte.",
+    R16_t: "Sesiones demasiado largas: cada turno relee todo el contexto",
+    R16_e: "El {share} del coste del hilo principal ({usd}) viene de turnos con más de {threshold_k}k tokens de contexto. Mediana por turno: {median_k}k.",
+    R16_h: "Una sesión por tarea; /compact al cerrar una fase; delega la exploración amplia en un subagente (su contexto se descarta); evita pegar salidas enormes.",
+    R16_v: "Mediana de contexto por turno y parte del coste en turnos largos, a la baja.",
+    R14_ack_t: "En transición: «{tenant}» con la cuenta «{account}» hasta el {until}",
+    R14_ack_e: "{usd} en el periodo. Transición aceptada; se corrige pasando el proyecto a la cuenta de su empresa.",
+    R14_expired: " (la transición acabó el {until})", in_transition: "en transición",
+    alignment_title: "Alineación cuenta-empresa", alignment_desc: "Qué parte del gasto de cada empresa va por una cuenta vinculada a esa empresa. Sube a medida que se corrigen las transiciones.",
+    aligned: "Alineado", overall: "Global",
+    R14_t: "Trabajo de una empresa con la cuenta de otra",
+    R14_e: "{usd} de proyectos de «{tenant}» se hicieron con la cuenta «{account}», vinculada a «{company}».",
+    R14_h: "Si no es intencionado, pasa el proyecto a la cuenta de su empresa (carpeta de configuración propia); si lo es, confirma que esa cuenta tiene desactivado el entrenamiento con tus datos.",
+    R14_v: "Gasto de otra empresa en esa cuenta igual a 0, o decisión registrada.",
+    all: "Todo", all_tenants: "Todas las empresas", all_projects: "Todos los proyectos",
+    total: "Coste del periodo", recorded: "registrado", estimated: "estimado",
+    vs_prev: "vs periodo anterior", active_days: "días con actividad", sessions: "sesiones", requests: "peticiones",
+    per_day: "Por día activo", about: "Qué significan las cifras", prev_thin: "periodo anterior con pocos datos: sin comparación", verified: "verificado", check: "revisar", nodata: "sin datos",
+    eq_note: "Equivalente API a precio de lista. En planes de suscripción no es una factura.",
+    recs_title: "Qué cambiar", recs_desc: "Reglas deterministas sobre tus datos. El ahorro es una estimación; verifica el efecto después de aplicarlo.",
+    no_recs: "Sin recomendaciones para este periodo.",
+    evidence: "Evidencia", how: "Cómo", verify: "Verificar", ceiling: "techo de ahorro", est_saving: "ahorro estimado",
+    confidence: { high: "confianza alta", medium: "confianza media", low: "confianza baja" },
+    R1_t: "Retomas sesiones con la caché caducada",
+    R1_e: "{resumes} reanudaciones con la caché caducada (TTL de {ttl} en esas sesiones) reescribieron {tokens} tokens de caché (≈ {usd} a precio de lista).",
+    R1_h: "Una sesión por tarea; /clear al cambiar de tarea; no retomar una sesión grande después de una pausa larga. sessioncoach hook-install te avisa justo en ese momento.",
+    R1_v: "Reanudaciones por semana a la baja (sessioncoach report).",
+    R2_t: "Mucho gasto en contexto de 1M",
+    R2_e: "El {share} del coste ({usd}) va a variantes con contexto de 1M.",
+    R2_h: "Usa el contexto estándar salvo cuando la tarea lo necesite (/model).",
+    R2_v: "Parte de [1m] a la baja sin que suba el coste por día.",
+    R3_t: "Subagentes genéricos en Opus",
+    R3_e: "{agents} subagentes general-purpose en Opus ({tokens} tokens; {subagent_opus_usd} a precio de lista).",
+    R3_h: "Define un explorer con model: sonnet y un lookup con model: haiku, o fija CLAUDE_CODE_SUBAGENT_MODEL=sonnet.",
+    R3_v: "Reparto de modelos en subagentes, con la calidad igual o mejor.",
+    R4_t: "Los subagentes pesan mucho en el coste",
+    R4_e: "El {share} del coste a precio de lista ({usd}) viene de subagentes.",
+    R4_h: "Haz en secuencia las tareas pequeñas; acota el prompt de cada subagente.",
+    R4_v: "Parte de subagentes a la baja.",
+    weekly_title: "Coste por semana y proyecto", weekly_desc: "Registrado + estimado. Los 7 proyectos con más gasto; el resto, en «otros».",
+    split_title: "¿En qué se va el dinero?", split_desc: "Por tipo de token, a precio de lista sobre toda la actividad de la ventana (no solo lo registrado en cost-state).",
+    cache_line: "Caché (lectura + escritura): {share} del gasto a precio de lista sobre toda la actividad ({read} lectura, {write} escritura). Es la única cifra de caché que muestra sessioncoach.",
+    unpriced_t: "Modelos sin precio exacto", unpriced_none: "Todos los modelos tienen precio de lista exacto.",
+    unpriced_d: "Se han tasado con el precio del modelo más reciente de su familia; la cifra es aproximada. Tabla de precios del {date}.",
+    unpriced_cols: ["Modelo", "Tasado como", "Peticiones", "USD afectados"], demo_banner: "Datos de demostración (sintéticos). No son tuyos.",
+    models_title: "Modelos", models_desc: "Parte del coste por modelo.",
+    projects_title: "Proyectos", subagents_title: "Subagentes", subagents_desc: "Totales que cada subagente devuelve a su sesión.",
+    verify_title: "Calidad del dato",
+    show_table: "Ver como tabla", week: "Semana", project: "Proyecto", tenant: "Empresa", usd: "USD", opus: "Opus",
+    type: "Tipo", model: "Modelo", agents: "Agentes", tokens: "Tokens", avg_min: "Min. medios", share: "Parte",
+    other: "otros", cache_read: "Lectura de caché", cache_write: "Escritura de caché", output: "Salida", input: "Entrada",
+    backtest: "Backtest (coste real / estimado por intervalo, 0,8–1,25)", conservation: "Conservación (cost-state = reparto)",
+    outliers: "Intervalos fuera de umbral", median: "mediana", reproduce: "Reproducir", no_data: "No hay datos para este filtro.",
+  },
+  en: {
+    tagline: "Honest measurement for Claude Code · local, nothing leaves this machine",
+    limits_title: "Plan limits and alerts", limits_desc: "Share of the 5-hour window and the weekly cap, as reported by Claude Code. You get a notification when a threshold is crossed or when the current pace would exhaust them before they reset.",
+    no_samples: "No samples yet. Install the status line: sessioncoach statusline-install (it chains after your current one, without replacing it).",
+    w5: "5-hour window", w7: "Weekly cap", resets: "resets", pace_warn: "at this pace you reach 100% around {e}",
+    eating: "What is eating the current window", by_project: "By project", by_driver: "By cause", by_session: "By session",
+    drv_main_cache_read: "Re-reading context (cache)", drv_main_other: "Rest of main thread", drv_subagents: "Subagents",
+    drv_cache_rewrite_after_idle: "Cache rewrite after a pause", budgets: "Budgets (API-equivalent)", no_budgets: "No budgets. Define them in alerts.json in the data folder (sessioncoach check shows where).",
+    sample_at: "sample from", thresholds_txt: "Alert thresholds", projection: "Month-end projection",
+    anon_on: "Anonymous: on", anon_off: "Anonymous: off", anon_badge: "Anonymous mode · names replaced by pseudonyms",
+    rv_title: "Review of {day}", rv_desc: "The last active day against the one before: what was expensive, session by session, and one change for today. Uses only numbers already stored (no tokens spent). Time, days and channels: alerts.json → review (in the data folder).",
+    rv_none: "Nothing expensive to point out that day.", rv_today: "For today",
+    rv_R1: "Don't resume a big session once its cache expired (idle over {ttl}): start a new one with a handoff. That day, {n} resumes rewrote cache for ≈ {usd}.",
+    rv_R16: "One session per task and /compact when a phase ends. Turns over {k}k tokens of context cost ≈ {usd}.",
+    rv_R3: "Run search subagents on Sonnet (CLAUDE_CODE_SUBAGENT_MODEL=sonnet). On Opus they cost ≈ {usd}.",
+    rv_MIX: "One session per project: {n} sessions worked on more than one project or company (≈ {usd} in total).",
+    rv_total: "Day total", rv_resumes: "Resumes after the cache expired", rv_long: "Long-context turns",
+    rv_opus: "Subagents on Opus", rv_mixed: "Sessions mixing projects", rv_vs: "vs {d}", rv_session: "Session",
+    rv_max_ctx: "Max context", rv_mix_col: "Mixing", rv_mix_tenant: "other company", rv_mix_project: "other project",
+    day_title: "Day", period_title: "Period", refresh: "Refresh", refreshing: "Refreshing…",
+    today: "Today", that_day: "This day", prev_day: "Previous day", same_time: "Previous day at this time",
+    so_far: "so far", data_from: "Data from the last ingest: {ago}. Today's cost is mostly estimated until Claude Code writes its cost record.",
+    min_ago: "{n} min ago", h_ago: "{n} h ago", account: "Account", company: "Company", all_accounts: "All accounts",
+    delta: "Δ", accounts_title: "Claude accounts", accounts_desc: "Each account is tied to a company. “Other company” is spend on another company's projects made with that account.",
+    other_company: "Other company", hour: "Hour", cum: "Cumulative",
+    fee_period: "Fee for period", value_x: "Value / fee", fee_day: "Daily fee", eq: "API equiv.",
+    paid_note: "Amounts are API-equivalent: the value of what you used at list price. What you pay is the plan's fixed fee{fee}; only billed separately if the account has extra usage enabled.",
+    paid_fee: " (≈ {fee} per day)", extra_on: "⚠ Paid extra usage ENABLED on “{acc}”: usage beyond the plan limit is billed separately.",
+    R16_t: "Sessions too long: every turn re-reads the whole context",
+    R16_e: "{share} of the main-thread cost ({usd}) comes from turns with more than {threshold_k}k tokens of context. Median per turn: {median_k}k.",
+    R16_h: "One session per task; /compact when a phase ends; delegate broad exploration to a subagent (its context is discarded); avoid pasting huge outputs.",
+    R16_v: "Median context per turn and share of cost in long turns going down.",
+    R14_ack_t: "In transition: “{tenant}” on the “{account}” account until {until}",
+    R14_ack_e: "{usd} in the period. Accepted transition; fixed by moving the project to its company's account.",
+    R14_expired: " (the transition ended on {until})", in_transition: "in transition",
+    alignment_title: "Account–company alignment", alignment_desc: "Share of each company's spend that runs on an account tied to that company. It rises as transitions are fixed.",
+    aligned: "Aligned", overall: "Overall",
+    R14_t: "One company's work on another company's account",
+    R14_e: "{usd} of “{tenant}” projects ran on the “{account}” account, tied to “{company}”.",
+    R14_h: "If unintended, move the project to its company's account (its own config dir); if intended, make sure that account doesn't allow training on your data.",
+    R14_v: "Other-company spend on that account at 0, or a recorded decision.",
+    all: "All", all_tenants: "All workspaces", all_projects: "All projects",
+    total: "Cost in period", recorded: "recorded", estimated: "estimated",
+    vs_prev: "vs previous period", active_days: "active days", sessions: "sessions", requests: "requests",
+    per_day: "Per active day", about: "What these figures mean", prev_thin: "previous period has little data: no comparison", verified: "verified", check: "check", nodata: "no data",
+    eq_note: "API-equivalent at list price. On subscription plans this is not an invoice.",
+    recs_title: "What to change", recs_desc: "Deterministic rules over your data. Savings are estimates; verify the effect after applying.",
+    no_recs: "No recommendations for this period.",
+    evidence: "Evidence", how: "How", verify: "Verify", ceiling: "savings ceiling", est_saving: "estimated saving",
+    confidence: { high: "high confidence", medium: "medium confidence", low: "low confidence" },
+    R1_t: "You resume sessions after the cache expired",
+    R1_e: "{resumes} resumes after the cache expired (TTL of {ttl} in those sessions) rewrote {tokens} cache tokens (≈ {usd} at list price).",
+    R1_h: "One session per task; /clear when switching tasks; don't resume a large session after a long break. sessioncoach hook-install warns you at that very moment.",
+    R1_v: "Resumes per week going down (sessioncoach report).",
+    R2_t: "A lot of spend on 1M context",
+    R2_e: "{share} of the cost ({usd}) goes to 1M-context variants.",
+    R2_h: "Use the standard context unless the task needs it (/model).",
+    R2_v: "[1m] share going down without the cost per day going up.",
+    R3_t: "General-purpose subagents on Opus",
+    R3_e: "{agents} general-purpose subagents on Opus ({tokens} tokens; {subagent_opus_usd} at list price).",
+    R3_h: "Define an explorer with model: sonnet and a lookup with model: haiku, or set CLAUDE_CODE_SUBAGENT_MODEL=sonnet.",
+    R3_v: "Subagent model mix, with quality the same or better.",
+    R4_t: "Subagents weigh a lot in the cost",
+    R4_e: "{share} of the list-price cost ({usd}) comes from subagents.",
+    R4_h: "Do small tasks in sequence; narrow each subagent's prompt.",
+    R4_v: "Subagent share going down.",
+    weekly_title: "Cost per week and project", weekly_desc: "Recorded + estimated. Top 7 projects by spend; the rest in “other”.",
+    split_title: "Where does the money go?", split_desc: "By token type, at list price over all activity in the window (not only what cost-state recorded).",
+    cache_line: "Cache (read + write): {share} of the list-price spend over all activity ({read} read, {write} write). It is the only cache figure sessioncoach shows.",
+    unpriced_t: "Models without an exact price", unpriced_none: "Every model has an exact list price.",
+    unpriced_d: "Priced like the newest model of their family; the figure is approximate. Price table of {date}.",
+    unpriced_cols: ["Model", "Priced as", "Requests", "USD affected"], demo_banner: "Demo data (synthetic). Not yours.",
+    models_title: "Models", models_desc: "Share of cost by model.",
+    projects_title: "Projects", subagents_title: "Subagents", subagents_desc: "Totals each subagent reports back to its session.",
+    verify_title: "Data quality",
+    show_table: "Show as table", week: "Week", project: "Project", tenant: "Workspace", usd: "USD", opus: "Opus",
+    type: "Type", model: "Model", agents: "Agents", tokens: "Tokens", avg_min: "Avg min", share: "Share",
+    other: "other", cache_read: "Cache read", cache_write: "Cache write", output: "Output", input: "Input",
+    backtest: "Backtest (real / estimated cost per interval, 0.8–1.25)", conservation: "Conservation (cost-state = allocation)",
+    outliers: "Intervals out of range", median: "median", reproduce: "Reproduce", no_data: "No data for this filter.",
+  },
+};
+Object.assign(I18N.es, {
+  al_title: "Avisos: qué avisó, por qué y qué pasó después", al_desc: "Cada aviso de los últimos 7 días con las cifras que lo dispararon y lo que ocurrió luego en esa sesión, calculado con números de la base (nunca con el texto de las conversaciones).",
+  al_none: "Ningún aviso en estos días.", al_when: "Cuándo", al_what: "Aviso", al_why: "Por qué saltó", al_then: "Qué pasó después", al_ctx: "Contexto", al_reason: "Por qué no avisó",
+  al_costly_usd: "reescrituras tras aviso", al_missed_title: "Pausas en las que la caché caducó sin aviso",
+  al_missed_desc: "Desde {since}, cuando empezó a funcionar el aviso de caché por caducar.", al_missed_window: "En los últimos {days} días.", al_missed_off: "Aún no ha corrido ninguna ingesta con el aviso de caché por caducar.",
+  al_missed_none: "Ninguna: todas las pausas largas recibieron aviso.",
+  al_not_applicable: "No aplicaba (ya habías pasado a otra cosa): {list}.",
+  alv_good: "actuaste", alv_costly: "costó", alv_bad: "falsa alarma", alv_neutral: "sin efecto", alv_pending: "pendiente", alv_info: "informativo",
+  als_hook: "Al escribir tras una pausa", als_cache_expiry: "Caché por caducar", als_five_hour: "Límite 5 h", als_seven_day: "Límite 7 d",
+  als_five_hour_pace: "Ritmo 5 h", als_seven_day_pace: "Ritmo 7 d", als_context: "Contexto (%)", als_context_tokens: "Contexto (tokens)",
+  als_budget: "Presupuesto", als_budget_projection: "Proyección de presupuesto",
+  alw_hook: "pausa de {idle} min ≥ {ttl} min de caché · contexto {ctx}", alw_cache_expiry: "contexto {ctx} · caché de {ttl} min · quedaban {rem} min",
+  alw_five_hour: "{pct} % ≥ umbral {th} %", alw_seven_day: "{pct} % ≥ umbral {th} %", alw_five_hour_pace: "{pct} %; al 100 % hacia las {eta}",
+  alw_seven_day_pace: "{pct} %; al 100 % hacia las {eta}", alw_context: "{pct} % ≥ {th} %", alw_context_tokens: "{ctx} ≥ {thk}",
+  alw_budget: "{name}: {used} de {limit} (≥ {th} %)", alw_budget_projection: "{name}: proyección {proj} > {limit}",
+  alo_false_alarm_compacted_you: "Falsa alarma: ya habías hecho /compact ({at}); el turno usó {real}",
+  alo_false_alarm_compacted_auto: "Falsa alarma: Claude Code ya había compactado ({at}); el turno usó {real}",
+  alo_false_alarm_compacted_idle: "Falsa alarma: Claude Code compactó la sesión en reposo al volver ({at}); el turno usó {real}",
+  alo_false_alarm_smaller: "Falsa alarma: el turno siguiente usó solo {real}", alo_compacted_you: "Hiciste /compact ({at}) → {post}",
+  alo_compacted_auto: "Claude Code compactó automáticamente ({at}) → {post}", alo_compacted_idle: "Claude Code compactó la sesión en reposo ({at}) → {post}",
+  alo_new_session: "Abriste una sesión nueva en el proyecto", alo_continued: "Seguiste con el contexto grande: reescritura ≈ {usd}",
+  alo_no_response: "Sin turno registrado después", alo_returned_in_time: "Volviste antes de que caducara ({at})",
+  alo_returned_after_expiry: "Volviste tras caducar ({at}): reescritura ≈ {usd}", alo_not_returned: "No volviste a esa sesión",
+  alo_pending: "Pendiente", alo_info: "—",
+  alm_compacted: "compactada antes de caducar", alm_subagent: "un subagente seguía trabajando", alm_replaced: "otra sesión del proyecto la sustituyó",
+  alm_disabled: "aviso desactivado (cache_expiry.enabled)", alm_notify_off: "notificaciones apagadas (notify)",
+  alm_no_ingest: "no hubo ingesta en la ventana (¿equipo dormido o tarea programada parada?)", alm_unknown: "sin motivo conocido: revisar",
+  settings: "Ajustes", st_title: "Ajustes", st_desc: "Activa o ajusta cada práctica. Nada se escribe hasta que revises el cambio exacto («Ver cambios») y lo apliques; antes de escribir se guarda una copia con fecha junto al archivo.",
+  st_scope: "Dónde aplicar", st_scope_global: "Global", st_scope_project: "Proyecto", st_scope_company: "Empresa",
+  st_scope_hint: "Global: ~/.claude/settings.json. Proyecto: .claude/settings.local.json (no entra en git); la regla va en CLAUDE.local.md o CLAUDE.md, a tu elección. Empresa: settings.json de su carpeta de configuración.",
+  st_practices: "Prácticas en este alcance", st_installed: "activo", st_not_installed: "inactivo", st_file: "Archivo", st_invalid: "No se puede leer: {e}",
+  st_hook: "Aviso de sesión retomada", st_hook_d: "Antes de enviar un mensaje avisa si la caché caducó y se releerá un contexto grande.",
+  st_statusline: "Línea de estado de sessioncoach", st_statusline_d: "Se encadena a la línea de estado actual (límites, contexto).",
+  st_cut: "Regla «cuándo cortar» en CLAUDE.md", st_cut_d: "Añade un bloque delimitado; al quitarla solo se borra ese bloque.",
+  st_thresholds: "Umbrales y alertas", st_th_hint: "Valores separados por comas.", st_five: "Ventana de 5 h (%)", st_seven: "Límite semanal (%)",
+  st_context: "Contexto (%)", st_ctxtok: "Contexto (tokens)", st_projection: "Avisar si el ritmo agota el límite", st_notify: "Notificaciones de escritorio",
+  st_lang: "Idioma de los avisos", st_lang_auto: "Automático",
+  st_nudge: "Aviso de sesión retomada · umbrales", st_idle: "Minutos de pausa", st_minctx: "Contexto mínimo (tokens)",
+  st_review: "Repaso diario", st_rv_enabled: "Activo", st_rv_time: "Hora", st_rv_days: "Días", st_rv_channels: "Canales", st_rv_lookback: "Día a repasar",
+  st_rv_last: "Último día con actividad", st_rv_ndays: "Hace N días", st_rv_tips: "Consejos máx.", st_rv_long: "Contexto largo (tokens)",
+  st_rv_agent: "Programar el repaso (programador del sistema)", st_rv_agent_d: "Cambiar hora o días regenera la tarea programada si ya está instalada.",
+  st_ch_notification: "Notificación", st_ch_dashboard: "Panel", st_ch_email: "Correo",
+  st_wd_mon: "Lun", st_wd_tue: "Mar", st_wd_wed: "Mié", st_wd_thu: "Jue", st_wd_fri: "Vie", st_wd_sat: "Sáb", st_wd_sun: "Dom",
+  st_defaults: "Valores por defecto", st_preview: "Ver cambios", st_apply: "Aplicar", st_cancel: "Cancelar", st_working: "Trabajando…",
+  st_nochanges: "Sin cambios: todo ya está así.", st_diff_title: "Cambio exacto que se va a escribir", st_confirm: "Confirma: se escribirá exactamente esto.",
+  st_applied: "Aplicado. Copias de seguridad: {b}", st_no_backup: "(archivo nuevo, sin copia)", st_stale: "Los archivos cambiaron desde la vista previa. Vuelve a pulsar «Ver cambios».",
+  st_dup_hook: "Ya está activo en el alcance global: se avisaría dos veces.",
+  st_dup_rule: "Claude Code carga la configuración de usuario (global, o la de la empresa del proyecto) y la del proyecto: el aviso en ambos se ejecutaría dos veces. Global y empresa nunca se cargan juntos, así que no se duplican.",
+  st_hook_blocked: "Bloqueado: ya está activo en {s}, que Claude Code también carga para este proyecto.",
+  st_sl_shadows: "Ya hay una línea de estado de sessioncoach en {s}; la del proyecto tendría prioridad sobre ella.",
+  st_hook_in_projects: "Estos proyectos tienen su propia copia del aviso y se ejecutaría dos veces: {p}",
+  st_rm_proj: "Quitar también el aviso de esos proyectos (se ve en los cambios)",
+  st_cut_dest: "Dónde guardar la regla en este proyecto", st_dest_local: "CLAUDE.local.md (recomendado)", st_dest_shared: "CLAUDE.md (equipo)",
+  st_dest_local_d: "CLAUDE.local.md es personal y queda fuera de git; Claude Code lo carga automáticamente junto a CLAUDE.md.",
+  st_dest_shared_d: "CLAUDE.md se comparte con tu equipo a través de git.",
+  st_gitignore: "Añadir CLAUDE.local.md al .gitignore del proyecto", st_gitignore_d: "git no lo ignora todavía: se vería como archivo nuevo para subir. El cambio aparece en la vista previa.",
+  st_w_statusline: "Ya hay una línea de estado de sessioncoach en {s}; la del proyecto tendría prioridad.",
+  st_w_projects: "Hay proyectos con su propia copia del aviso (se ejecutaría dos veces): {p}",
+  st_w_legacy_agent: "También se retira el LaunchAgent instalado con el nombre viejo (daf-claude-kit), con copia de seguridad: {p}", st_redacted: "Los valores de claves que parecen secretos se ocultan en esta vista.",
+  st_err: "Error: {e}", st_new: "archivo nuevo"
+});
+Object.assign(I18N.en, {
+  al_title: "Warnings: what fired, why, and what happened next", al_desc: "Every warning of the last 7 days with the numbers that fired it and what happened next in that session, computed from numbers in the database (never from conversation text).",
+  al_none: "No warnings these days.", al_when: "When", al_what: "Warning", al_why: "Why it fired", al_then: "What happened next", al_ctx: "Context", al_reason: "Why no warning",
+  al_costly_usd: "re-writes after a warning", al_missed_title: "Pauses whose cache expired without a warning",
+  al_missed_desc: "Since {since}, when the cache-expiry warning started.", al_missed_window: "In the last {days} days.", al_missed_off: "No ingest has run with the cache-expiry warning yet.",
+  al_missed_none: "None: every long pause was warned.",
+  al_not_applicable: "Nothing to warn about (you had already moved on): {list}.",
+  alv_good: "you acted", alv_costly: "cost", alv_bad: "false alarm", alv_neutral: "no effect", alv_pending: "pending", alv_info: "info",
+  als_hook: "On a prompt after a pause", als_cache_expiry: "Cache about to expire", als_five_hour: "5 h limit", als_seven_day: "7 d limit",
+  als_five_hour_pace: "5 h pace", als_seven_day_pace: "7 d pace", als_context: "Context (%)", als_context_tokens: "Context (tokens)",
+  als_budget: "Budget", als_budget_projection: "Budget projection",
+  alw_hook: "{idle} min idle ≥ {ttl} min cache · context {ctx}", alw_cache_expiry: "context {ctx} · {ttl} min cache · {rem} min left",
+  alw_five_hour: "{pct} % ≥ threshold {th} %", alw_seven_day: "{pct} % ≥ threshold {th} %", alw_five_hour_pace: "{pct} %; 100 % around {eta}",
+  alw_seven_day_pace: "{pct} %; 100 % around {eta}", alw_context: "{pct} % ≥ {th} %", alw_context_tokens: "{ctx} ≥ {thk}",
+  alw_budget: "{name}: {used} of {limit} (≥ {th} %)", alw_budget_projection: "{name}: projection {proj} > {limit}",
+  alo_false_alarm_compacted_you: "False alarm: you had already run /compact ({at}); the turn used {real}",
+  alo_false_alarm_compacted_auto: "False alarm: Claude Code had already compacted ({at}); the turn used {real}",
+  alo_false_alarm_compacted_idle: "False alarm: Claude Code compacted the idle session on return ({at}); the turn used {real}",
+  alo_false_alarm_smaller: "False alarm: the next turn used only {real}", alo_compacted_you: "You ran /compact ({at}) → {post}",
+  alo_compacted_auto: "Claude Code compacted automatically ({at}) → {post}", alo_compacted_idle: "Claude Code compacted the idle session ({at}) → {post}",
+  alo_new_session: "You opened a new session in the project", alo_continued: "You went on with the big context: re-write ≈ {usd}",
+  alo_no_response: "No turn recorded afterwards", alo_returned_in_time: "You came back before it expired ({at})",
+  alo_returned_after_expiry: "You came back after it expired ({at}): re-write ≈ {usd}", alo_not_returned: "You did not come back to that session",
+  alo_pending: "Pending", alo_info: "—",
+  alm_compacted: "compacted before it expired", alm_subagent: "a subagent was still working", alm_replaced: "another session of the project replaced it",
+  alm_disabled: "warning switched off (cache_expiry.enabled)", alm_notify_off: "notifications off (notify)",
+  alm_no_ingest: "no ingest ran in the window (computer asleep or scheduled job stopped?)", alm_unknown: "no known reason: check",
+  settings: "Settings", st_title: "Settings", st_desc: "Turn each practice on or tune it. Nothing is written until you review the exact change (\u201cSee changes\u201d) and apply it; a dated backup is saved next to the file first.",
+  st_scope: "Where to apply", st_scope_global: "Global", st_scope_project: "Project", st_scope_company: "Company",
+  st_scope_hint: "Global: ~/.claude/settings.json. Project: .claude/settings.local.json (kept out of git); the rule goes in CLAUDE.local.md or CLAUDE.md, your choice. Company: settings.json in its config folder.",
+  st_practices: "Practices in this scope", st_installed: "on", st_not_installed: "off", st_file: "File", st_invalid: "Cannot read it: {e}",
+  st_hook: "Resumed-session notice", st_hook_d: "Before a prompt is sent, warns if the cache expired and a large context will be re-read.",
+  st_statusline: "sessioncoach status line", st_statusline_d: "Chained after the current status line (limits, context).",
+  st_cut: "\u201cWhen to cut\u201d rule in CLAUDE.md", st_cut_d: "Adds a delimited block; removing it deletes only that block.",
+  st_thresholds: "Thresholds and alerts", st_th_hint: "Comma-separated values.", st_five: "5-hour window (%)", st_seven: "Weekly limit (%)",
+  st_context: "Context (%)", st_ctxtok: "Context (tokens)", st_projection: "Warn when the pace would exhaust a limit", st_notify: "Desktop notifications",
+  st_lang: "Alert language", st_lang_auto: "Automatic",
+  st_nudge: "Resumed-session notice · thresholds", st_idle: "Idle minutes", st_minctx: "Minimum context (tokens)",
+  st_review: "Daily review", st_rv_enabled: "Enabled", st_rv_time: "Time", st_rv_days: "Days", st_rv_channels: "Channels", st_rv_lookback: "Day to review",
+  st_rv_last: "Last active day", st_rv_ndays: "N days ago", st_rv_tips: "Max tips", st_rv_long: "Long context (tokens)",
+  st_rv_agent: "Schedule the review (system scheduler)", st_rv_agent_d: "Changing time or days regenerates the scheduled job if it is installed.",
+  st_ch_notification: "Notification", st_ch_dashboard: "Dashboard", st_ch_email: "Email",
+  st_wd_mon: "Mon", st_wd_tue: "Tue", st_wd_wed: "Wed", st_wd_thu: "Thu", st_wd_fri: "Fri", st_wd_sat: "Sat", st_wd_sun: "Sun",
+  st_defaults: "Reset to defaults", st_preview: "See changes", st_apply: "Apply", st_cancel: "Cancel", st_working: "Working…",
+  st_nochanges: "No changes: everything is already like this.", st_diff_title: "Exact change that will be written", st_confirm: "Confirm: exactly this will be written.",
+  st_applied: "Applied. Backups: {b}", st_no_backup: "(new file, no backup)", st_stale: "The files changed since the preview. Press \u201cSee changes\u201d again.",
+  st_dup_hook: "Already on in the global scope: you would be warned twice.",
+  st_dup_rule: "Claude Code loads the user settings (global, or those of the project's company) plus the project's: the notice in both would run twice. Global and company are never loaded together, so they do not duplicate.",
+  st_hook_blocked: "Blocked: it is already on in {s}, which Claude Code also loads for this project.",
+  st_sl_shadows: "sessioncoach's status line is already in {s}; the project's would take precedence over it.",
+  st_hook_in_projects: "These projects have their own copy of the notice, so it would run twice: {p}",
+  st_rm_proj: "Also remove the notice from those projects (shown in the changes)",
+  st_cut_dest: "Where to keep the rule in this project", st_dest_local: "CLAUDE.local.md (recommended)", st_dest_shared: "CLAUDE.md (team)",
+  st_dest_local_d: "CLAUDE.local.md is personal and stays out of git; Claude Code loads it automatically together with CLAUDE.md.",
+  st_dest_shared_d: "CLAUDE.md is shared with your team through git.",
+  st_gitignore: "Add CLAUDE.local.md to the project's .gitignore", st_gitignore_d: "git does not ignore it yet: it would show up as a new file to commit. The change appears in the preview.",
+  st_w_statusline: "sessioncoach's status line is already in {s}; the project's would take precedence.",
+  st_w_projects: "Some projects have their own copy of the notice (it would run twice): {p}",
+  st_w_legacy_agent: "The LaunchAgent installed under the old name (daf-claude-kit) is also retired, with a backup: {p}", st_redacted: "Values of keys that look like secrets are hidden in this view.",
+  st_err: "Error: {e}", st_new: "new file"
+});
+const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+const state = { days: 30, tenant: "", project: "", account: "", date: "", dayData: null, anon: new URLSearchParams(location.search).get("anon") === "1", lang: (navigator.language || "en").startsWith("es") ? "es" : "en", data: null };
+const STORE_KEY = "sessioncoach", OLD_STORE_KEY = "daf-claude-kit";  // the old key is read once, until the first save
+try { const s = JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem(OLD_STORE_KEY) || "{}"); Object.assign(state, s); } catch (e) { /* storage unavailable */ }
+if (state.lang !== "es") state.lang = "en";  // a stored value from elsewhere must not break t()
+document.documentElement.lang = state.lang;  // before the first render: the loading and error views too
+const $ = (id) => document.getElementById(id);
+const t = (k) => I18N[state.lang][k] ?? k;
+const fmtUSD = (v) => v == null ? "–" : new Intl.NumberFormat(state.lang, { style: "currency", currency: "USD", maximumFractionDigits: v >= 100 ? 0 : 2 }).format(v);
+const fmtAxis = (v) => new Intl.NumberFormat(state.lang, { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1 }).format(v);
+const fmtN = (v) => new Intl.NumberFormat(state.lang, { notation: "compact", maximumFractionDigits: 1 }).format(v || 0);
+const fmtPct = (v) => new Intl.NumberFormat(state.lang, { style: "percent", maximumFractionDigits: 0 }).format(v || 0);
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function save() { try { localStorage.removeItem(OLD_STORE_KEY); localStorage.setItem(STORE_KEY, JSON.stringify({ days: state.days, tenant: state.tenant, project: state.project, account: state.account, lang: state.lang })); } catch (e) { /* ignore */ } }
+function fill(tpl, p) { return tpl.replace(/\{(\w+)\}/g, (_, k) => k === "usd" || k.endsWith("_usd") ? fmtUSD(p[k]) : k === "share" ? fmtPct(p[k]) : k === "tokens" ? fmtN(p[k]) : esc(p[k])); }
+
+function repro(extra) {
+  const parts = ["sessioncoach report --days " + (state.days || 0)];
+  if (state.tenant) parts.push("--tenant " + state.tenant);
+  if (state.project) parts.push("--project '" + state.project + "'");
+  if (state.account) parts.push("--account " + state.account);
+  return `${t("reproduce")}: <code>${esc(parts.join(" ") + (extra || ""))}</code>`;
+}
+
+// the server restarted (new session cookie): reload to show how to get back in instead of a broken page
+const lostSession = (r) => { if (r && r.status === 401) { location.reload(); return true; } return false; };
+
+async function load() {
+  const f = { tenant: state.tenant, project: state.project, account: state.account, ...(state.anon ? { anon: "1", lang: state.lang } : {}) };
+  const q = new URLSearchParams({ days: state.days, ...f });
+  const qd = new URLSearchParams({ date: state.date, ...f });
+  const ql = new URLSearchParams(state.anon ? { anon: "1", lang: state.lang } : {});
+  const [a, b, c, r, w] = await Promise.all([fetch("/api/data?" + q.toString()), fetch("/api/day?" + qd.toString()), fetch("/api/limits?" + ql.toString()),
+    fetch("/api/review?" + ql.toString()), fetch("/api/alerts?" + new URLSearchParams({ days: 7, ...Object.fromEntries(ql) }).toString()).catch(() => null)]);
+  if (lostSession(a)) return;
+  state.data = await a.json(); state.dayData = await b.json(); state.limits = await c.json(); state.review = r.ok ? await r.json() : null;
+  state.alerts = w && w.ok ? await w.json().catch(() => null) : null;  // the warnings card never takes the dashboard down
+  render();
+}
+
+function renderFilters() {
+  const periods = [[7, "7d"], [30, "30d"], [90, "90d"], [0, t("all")]];
+  $("period").innerHTML = periods.map(([d, l]) => `<button type="button" data-d="${d}" aria-pressed="${state.days === d}">${l}</button>`).join("");
+  $("period").querySelectorAll("button").forEach((b) => b.onclick = () => { state.days = +b.dataset.d; save(); load(); });
+  const o = state.data.options;
+  $("tenant").innerHTML = `<option value="">${t("all_tenants")}</option>` + o.tenants.map((x) => `<option ${x === state.tenant ? "selected" : ""}>${esc(x)}</option>`).join("");
+  $("project").innerHTML = `<option value="">${t("all_projects")}</option>` + o.projects.map((x) => `<option ${x === state.project ? "selected" : ""}>${esc(x)}</option>`).join("");
+  $("account").innerHTML = `<option value="">${t("all_accounts")}</option>` + o.accounts.map((x) => `<option value="${esc(x.id)}" ${x.id === state.account ? "selected" : ""}>${esc(x.label)}</option>`).join("");
+  $("lang").textContent = state.lang === "es" ? "EN" : "ES";
+  $("anon").textContent = state.anon ? t("anon_on") : t("anon_off");
+  $("anon").setAttribute("aria-pressed", String(state.anon));
+  $("anon-badge").style.display = state.anon ? "inline-flex" : "none";
+  $("anon-badge").textContent = t("anon_badge");
+  const demo = !!state.data.demo;
+  $("demo-banner").style.display = demo ? "block" : "none";
+  $("demo-banner").textContent = t("demo_banner");
+  document.documentElement.lang = state.lang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => el.textContent = t(el.dataset.i18n));
+}
+
+function badge(status) {
+  const map = { PASS: ["--good", "✓ " + t("verified")], CHECK: ["--warning", "⚠ " + t("check")], "NO DATA": ["--text-muted", "∅ " + t("nodata")] };
+  const [c, l] = map[status] || map["NO DATA"];
+  return `<span class="badge"><span class="dot" style="background:var(${c})"></span>${l}</span>`;
+}
+
+function renderTiles() {
+  const s = state.data.summary, v = state.data.verification;
+  const status = v.backtest === "PASS" && v.conservation.status === "PASS" ? "PASS" : (v.backtest === "NO DATA" ? "NO DATA" : "CHECK");
+  let delta = "";
+  if (s.prev_total_usd && s.prev_active_days < s.active_days * 0.5) {
+    delta = t("prev_thin");
+  } else if (s.prev_total_usd) {
+    const d = (s.total_usd - s.prev_total_usd) / s.prev_total_usd;
+    delta = `${d >= 0 ? "▲" : "▼"} ${fmtPct(Math.abs(d))} ${t("vs_prev")} (${fmtUSD(s.prev_total_usd)})`;
+  }
+  $("tiles").innerHTML = `
+    <div class="card tile"><div class="label">${t("total")}</div><div class="value">${fmtUSD(s.total_usd)}</div>
+      <div class="note">${fmtUSD(s.recorded_usd)} ${t("recorded")} · ≈ ${fmtUSD(s.estimated_usd)} ${t("estimated")}</div>
+      <div class="note">${badge(status)} ${delta ? " · " + delta : ""}</div></div>
+    <div class="card tile"><div class="label">${t("per_day")}</div><div class="value">${fmtUSD(s.active_days ? s.total_usd / s.active_days : 0)}</div>
+      <div class="note">${s.active_days} ${t("active_days")}</div></div>
+    <div class="card tile"><div class="label">${t("sessions")}</div><div class="value">${s.sessions}</div>
+      <div class="note">${fmtN(s.requests)} ${t("requests")}</div></div>
+    <div class="card tile"><div class="label">${t("about")}</div><div class="value" style="font-size:16px;font-weight:500;line-height:1.35">${t("eq_note")}</div></div>`;
+}
+
+function renderRecs() {
+  const recs = state.data.recommendations;
+  if (!recs.length) { $("recs").innerHTML = `<div class="empty">${t("no_recs")}</div>`; return; }
+  $("recs").innerHTML = recs.map((r, i) => {
+    if (r.id === "R14" && r.acknowledged) {
+      return `<div class="rec" style="opacity:.75"><div class="num" style="background:var(--text-muted)">${i + 1}</div>
+        <div><h3 style="font-weight:600">${fill(t("R14_ack_t"), r.params)}</h3><dl><dt>${t("evidence")}</dt><dd>${fill(t("R14_ack_e"), r.params)}</dd></dl></div>
+        <div class="saving"><span style="display:block">${t("in_transition")}</span></div></div>`;
+    }
+    const saving = r.saving_usd != null ? `<b>≈ ${fmtUSD(r.saving_usd)}</b><span>${r.id === "R1" ? t("ceiling") : t("est_saving")}</span>` : `<b>–</b>`;
+    return `<div class="rec"><div class="num">${i + 1}</div>
+      <div><h3>${esc(t(r.id + "_t"))}${r.id === "R14" && r.params.expired ? esc(t("R14_expired").replace("{until}", r.params.until)) : ""}</h3>
+        <dl><dt>${t("evidence")}</dt><dd>${fill(t(r.id + "_e"), r.params)}</dd>
+            <dt>${t("how")}</dt><dd>${esc(t(r.id + "_h"))}</dd>
+            <dt>${t("verify")}</dt><dd>${esc(t(r.id + "_v"))}</dd></dl></div>
+      <div class="saving">${saving}<span style="display:block">${t("confidence")[r.confidence]}</span></div></div>`;
+  }).join("");
+}
+
+function color(series, i) { return series[i] === "other" ? "var(--other)" : `var(${SLOTS[i % SLOTS.length]})`; }
+
+function renderWeekly() {
+  const w = state.data.weekly, el = $("weekly");
+  if (!w.weeks.length) { el.innerHTML = `<div class="empty">${t("no_data")}</div>`; $("weekly-legend").innerHTML = ""; $("weekly-table").innerHTML = ""; return; }
+  const W = Math.max(320, el.clientWidth || 800), H = 240, m = { l: 80, r: 8, t: 8, b: 26 };
+  const totals = w.weeks.map((x) => w.series.reduce((a, s) => a + (x.values[s] || 0), 0));
+  const max = niceMax(Math.max(...totals, 1));
+  const n = w.weeks.length, band = (W - m.l - m.r) / n, bw = Math.min(48, band * 0.62);
+  const y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(t("weekly_title"))}">`;
+  for (let i = 0; i <= 4; i++) { const v = max * i / 4, yy = y(v);
+    svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${m.l - 8}" y="${yy + 4}" text-anchor="end">${fmtAxis(v)}</text>`; }
+  w.weeks.forEach((wk, i) => {
+    const x = m.l + band * i + (band - bw) / 2; let acc = 0;
+    const segs = w.series.map((s, j) => [j, wk.values[s] || 0]).filter(([, v]) => v > 0);
+    segs.forEach(([j, v], k) => {
+      const y0 = y(acc), y1 = y(acc + v); acc += v;
+      const h = Math.max(0, y0 - y1 - (k < segs.length - 1 ? 2 : 0));
+      const top = k === segs.length - 1;
+      svg += top ? `<path d="${roundTop(x, y0 - h, bw, h, 4)}" fill="${color(w.series, j)}"/>` : `<rect x="${x}" y="${y0 - h}" width="${bw}" height="${h}" fill="${color(w.series, j)}"/>`;
+    });
+    const label = new Date(wk.week + "T00:00").toLocaleDateString(state.lang, { day: "numeric", month: "short" });
+    if (n <= 16 || i % Math.ceil(n / 12) === 0) svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${label}</text>`;
+    svg += `<rect x="${m.l + band * i}" y="${m.t}" width="${band}" height="${H - m.t - m.b}" fill="transparent" data-i="${i}"/>`;
+  });
+  svg += `</svg><div class="tip" id="weekly-tip"></div>`;
+  el.innerHTML = svg;
+  const tip = $("weekly-tip");
+  el.querySelectorAll("rect[data-i]").forEach((r) => {
+    r.addEventListener("mousemove", (ev) => {
+      const wk = w.weeks[+r.dataset.i], tot = totals[+r.dataset.i];
+      const rows = w.series.map((s, j) => [s, j, wk.values[s] || 0]).filter((x) => x[2] > 0).reverse();
+      tip.innerHTML = `<b>${t("week")} ${esc(wk.week)}</b> · ${fmtUSD(tot)}` + rows.map(([s, j, v]) =>
+        `<div class="row"><span><i style="background:${color(w.series, j)}"></i>${esc(s === "other" ? t("other") : s)}</span><span>${fmtUSD(v)}</span></div>`).join("");
+      tip.style.display = "block";
+      const bx = el.getBoundingClientRect(); let left = ev.clientX - bx.left + 14;
+      if (left + 200 > bx.width) left = ev.clientX - bx.left - 214;
+      tip.style.left = left + "px"; tip.style.top = Math.max(0, ev.clientY - bx.top - 20) + "px";
+    });
+    r.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
+  $("weekly-legend").innerHTML = w.series.map((s, j) => `<span><i style="background:${color(w.series, j)}"></i>${esc(s === "other" ? t("other") : s)}</span>`).join("");
+  $("weekly-table").innerHTML = table([t("week"), ...w.series.map((s) => s === "other" ? t("other") : s)],
+    w.weeks.map((wk) => [wk.week, ...w.series.map((s) => fmtUSD(wk.values[s] || 0))]), [false, ...w.series.map(() => true)]);
+  $("weekly-repro").innerHTML = repro();
+}
+
+function renderSplit() {
+  const d = state.data.token_split, el = $("split");
+  const total = d.reduce((a, x) => a + x.usd, 0);
+  if (!total) { el.innerHTML = `<div class="empty">${t("no_data")}</div>`; $("split-table").innerHTML = ""; $("split-cache").textContent = ""; return; }
+  el.innerHTML = d.map((x, i) => `
+    <div style="display:grid;grid-template-columns:140px 1fr 90px;gap:10px;align-items:center;margin:6px 0">
+      <span style="color:var(--text-secondary)"><i style="display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;background:var(${SLOTS[i]})"></i>${t(x.type)}</span>
+      <svg height="14" width="100%" preserveAspectRatio="none" viewBox="0 0 100 14"><rect x="0" y="2" width="100" height="10" rx="4" fill="var(--grid)"/>
+        <rect x="0" y="2" width="${Math.max(0.5, x.share * 100)}" height="10" rx="4" fill="var(${SLOTS[i]})"/></svg>
+      <span style="text-align:right;font-variant-numeric:tabular-nums">${fmtPct(x.share)}</span></div>`).join("");
+  const cs = state.data.cache_share;
+  $("split-cache").textContent = cs ? fill(t("cache_line"), { share: cs.share, read: fmtPct(cs.read_share), write: fmtPct(cs.write_share) }) : "";
+  $("split-table").innerHTML = table([t("type"), t("usd"), t("share")], d.map((x) => [t(x.type), fmtUSD(x.usd), fmtPct(x.share)]), [false, true, true]);
+}
+
+function renderModels() {
+  const d = state.data.models.filter((x) => x.share >= 0.001), el = $("models");
+  if (!d.length) { el.innerHTML = `<div class="empty">${t("no_data")}</div>`; return; }
+  el.innerHTML = d.map((x) => `
+    <div style="display:grid;grid-template-columns:150px 1fr 120px;gap:10px;align-items:center;margin:6px 0">
+      <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.model)}</span>
+      <svg height="14" width="100%" preserveAspectRatio="none" viewBox="0 0 100 14"><rect x="0" y="2" width="100" height="10" rx="4" fill="var(--grid)"/>
+        <rect x="0" y="2" width="${Math.max(0.5, x.share * 100)}" height="10" rx="4" fill="var(--s1)"/></svg>
+      <span style="text-align:right;font-variant-numeric:tabular-nums">${fmtPct(x.share)} · ${fmtUSD(x.usd)}</span></div>`).join("");
+}
+
+function renderProjects() {
+  const d = state.data.projects;
+  $("projects").innerHTML = d.length ? table([t("project"), t("tenant"), t("account"), t("usd"), t("estimated"), t("opus"), t("sessions")],
+    d.map((p) => [p.project, p.tenant, p.account, fmtUSD(p.usd), fmtUSD(p.estimated_usd), p.opus_share == null ? "–" : fmtPct(p.opus_share), p.sessions]),
+    [false, false, false, true, true, true, true]) + `<div class="repro">${repro()}</div>` : `<div class="empty">${t("no_data")}</div>`;
+}
+
+function renderSubagents() {
+  const d = state.data.subagents;
+  $("subagents").innerHTML = d.length ? table([t("type"), t("model"), t("agents"), t("tokens"), t("avg_min")],
+    d.map((s) => [s.type, s.model, s.agents, fmtN(s.tokens), s.avg_min]), [false, false, true, true, true]) : `<div class="empty">${t("no_data")}</div>`;
+}
+
+function renderUnpriced() {
+  const pr = state.data.pricing || { unpriced: [] };
+  const rows = pr.unpriced;
+  const head = `<p>${t("unpriced_t")}: ${rows.length ? badge("CHECK") : badge("PASS")}</p>`;
+  if (!rows.length) return head + `<p class="desc">${t("unpriced_none")}</p>`;
+  return head + `<p class="desc">${fill(t("unpriced_d"), { date: pr.table_date })}</p>` +
+    table(t("unpriced_cols"), rows.map((x) => [x.model, x.fallback, fmtN(x.requests), fmtUSD(x.usd ?? x.list_usd)]), [false, false, true, true]);
+}
+
+function renderVerify() {
+  const v = state.data.verification;
+  const bt = v.backtest === "NO DATA" ? badge("NO DATA") : `${badge(v.backtest)} n=${v.intervals} · ${t("median")} ${v.median} · min ${v.min} · max ${v.max}`;
+  const out = v.outliers.length ? `<details><summary>${t("outliers")} (${v.outliers.length})</summary>${table(["project_dir", "session", "from", "to", "ratio"],
+    v.outliers.map((o) => [o.project_dir, o.session, o.from, o.to, o.ratio]), [false, false, false, false, true])}</details>` : "";
+  $("verify").innerHTML = `<p>${t("backtest")}: ${bt}</p>${out}
+    <p>${t("conservation")}: ${badge(v.conservation.status)} ${fmtUSD(v.conservation.slices_usd)} = ${fmtUSD(v.conservation.cost_state_usd)}</p>
+    ${renderUnpriced()}
+    <p class="desc">${t("eq_note")}</p><div class="repro">${t("reproduce")}: <code>sessioncoach verify</code> · DB: <code>${esc(state.data.db)}</code></div>`;
+}
+
+function renderAccounts() {
+  const al = state.data.alignment;
+  if (al && al.tenants.length) {
+    $("alignment").innerHTML = `<p style="margin:4px 0 8px">${t("overall")}: <b>${al.overall_pct == null ? "–" : fmtPct(al.overall_pct)}</b></p>` +
+      table([t("company"), t("usd"), t("aligned"), "%"], al.tenants.map((r) => [r.tenant, fmtUSD(r.usd), fmtUSD(r.aligned_usd), r.pct == null ? "–" : fmtPct(r.pct)]), [false, true, true, true]);
+  } else { $("alignment").innerHTML = `<div class="empty">${t("no_data")}</div>`; }
+  const d = state.data.accounts;
+  $("accounts").innerHTML = d.length ? table([t("account"), t("company"), t("usd") + " (" + t("eq") + ")", t("fee_period"), t("value_x"), t("projects_title"), t("other_company")],
+    d.map((a) => [a.label + (a.extra_usage ? " ⚠" : ""), a.company || "–", fmtUSD(a.usd), a.fee_period_usd == null ? "–" : fmtUSD(a.fee_period_usd),
+      a.value_multiple == null ? "–" : a.value_multiple + "×", a.projects, a.other_company_usd ? fmtUSD(a.other_company_usd) : "–"]),
+    [false, false, true, true, true, true, true]) : `<div class="empty">${t("no_data")}</div>`;
+}
+
+function ago(iso) {
+  if (!iso) return "–";
+  const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  return m < 120 ? t("min_ago").replace("{n}", m) : t("h_ago").replace("{n}", Math.round(m / 60));
+}
+
+function deltaTxt(cur, prev) {
+  if (!prev) return "";
+  const d = (cur - prev) / prev;
+  return `${d >= 0 ? "▲" : "▼"} ${fmtPct(Math.abs(d))}`;
+}
+
+function renderDay() {
+  const d = state.dayData; if (!d) return;
+  if (!state.date) $("day-date").value = d.date; else $("day-date").value = state.date;
+  const fees = d.accounts.filter((a) => a.fee_day_usd).map((a) => fmtUSD(a.fee_day_usd));
+  const extra = d.accounts.filter((a) => a.extra_usage).map((a) => t("extra_on").replace("{acc}", a.label));
+  $("day-fresh").innerHTML = esc(t("data_from").replace("{ago}", ago(d.last_ingest))) + "<br>" +
+    esc(t("paid_note").replace("{fee}", fees.length ? t("paid_fee").replace("{fee}", fees.join(" + ")) : "")) +
+    (extra.length ? `<br><b style="color:var(--critical)">${esc(extra.join(" "))}</b>` : "");
+  const td = d.totals.today, pv = d.totals.prev;
+  const fmtDate = (s) => new Date(s + "T00:00").toLocaleDateString(state.lang, { weekday: "short", day: "numeric", month: "short" });
+  let tiles = `
+    <div class="card tile"><div class="label">${d.is_today ? t("today") : t("that_day")} · ${fmtDate(d.date)}</div>
+      <div class="value">${fmtUSD(td.usd)}</div><div class="note">${d.is_today ? t("so_far") + " · " : ""}≈ ${fmtUSD(td.estimated_usd)} ${t("estimated")}</div></div>
+    <div class="card tile"><div class="label">${t("prev_day")} · ${fmtDate(d.prev_date)}</div>
+      <div class="value">${fmtUSD(pv.usd)}</div><div class="note">${d.is_today ? "" : deltaTxt(td.usd, pv.usd)}</div></div>`;
+  if (d.is_today) tiles += `
+    <div class="card tile"><div class="label">${t("same_time")} (${String(d.hour_now).padStart(2, "0")}:59)</div>
+      <div class="value">${fmtUSD(d.totals.prev_same_time_usd)}</div><div class="note">${deltaTxt(td.usd, d.totals.prev_same_time_usd)} ${t("today").toLowerCase()}</div></div>`;
+  $("day-tiles").innerHTML = tiles;
+  renderDayChart(d);
+  $("day-accounts").innerHTML = table([t("account"), t("fee_day"), d.date.slice(5) + " (" + t("eq") + ")", d.prev_date.slice(5), t("delta")],
+    d.accounts.map((a) => [a.label + (a.extra_usage ? " ⚠" : ""), a.fee_day_usd == null ? "–" : fmtUSD(a.fee_day_usd), fmtUSD(a.today), fmtUSD(a.prev), signed(a.today - a.prev)]), [false, true, true, true, true]);
+  $("day-projects").innerHTML = table([t("project"), t("tenant"), d.date.slice(5), d.prev_date.slice(5), t("delta")],
+    d.projects.slice(0, 12).map((p) => [p.project, p.tenant, fmtUSD(p.today), fmtUSD(p.prev), signed(p.today - p.prev)]), [false, false, true, true, true]);
+  const parts = ["sessioncoach day --date " + d.date];
+  if (state.tenant) parts.push("--tenant " + state.tenant);
+  if (state.project) parts.push("--project '" + state.project + "'");
+  if (state.account) parts.push("--account " + state.account);
+  $("day-repro").innerHTML = `${t("reproduce")}: <code>${esc(parts.join(" "))}</code>`;
+}
+
+function renderReview() {
+  const R = state.review, card = $("review-card");
+  if (!R || !R.day || !(R.config.channels || []).includes("dashboard")) { card.style.display = "none"; return; }
+  card.style.display = "";
+  const fmtDate = (s) => new Date(s + "T00:00").toLocaleDateString(state.lang, { weekday: "long", day: "numeric", month: "long" });
+  $("review-title").textContent = t("rv_title").replace("{day}", fmtDate(R.day));
+  const tip = (R.tips || [])[0];
+  $("review-tip").innerHTML = tip ? `<div class="rec"><div class="num">→</div><div><h3>${t("rv_today")}</h3>
+      <dl><dd style="grid-column:1/-1">${fill(t("rv_" + tip.id), tip.params)}</dd></dl></div>
+      <div class="saving">${tip.saving_usd != null ? `<b>≈ ${fmtUSD(tip.saving_usd)}</b><span>${t("ceiling")}</span>` : ""}</div></div>` : `<div class="empty">${t("rv_none")}</div>`;
+  const c = R.causes, pc = R.prev_causes || {}, pt = R.prev_totals;
+  const prevNote = (cur, prev) => R.prev_day && prev != null ? `${deltaTxt(cur, prev)} ${t("rv_vs").replace("{d}", R.prev_day.slice(5))} (${fmtUSD(prev)})` : "";
+  const tile = (label, value, note) => `<div class="card tile"><div class="label">${label}</div><div class="value">${value}</div><div class="note">${note}</div></div>`;
+  $("review-tiles").innerHTML =
+    tile(t("rv_total"), fmtUSD(R.totals.usd), (pt ? prevNote(R.totals.usd, pt.usd) + " · " : "") + `≈ ${fmtUSD(R.totals.estimated_usd)} ${t("estimated")}`) +
+    tile(t("rv_resumes"), String(c.resumes), `≈ ${fmtUSD(c.resume_usd)} · ${prevNote(c.resume_usd, pc.resume_usd)}`) +
+    tile(t("rv_long"), fmtUSD(c.long_usd), `${fmtN(c.long_turns)} > ${Math.round(R.config.long_context_tokens / 1000)}k · ${prevNote(c.long_usd, pc.long_usd)}`) +
+    tile(t("rv_opus"), fmtUSD(c.opus_usd), `${c.opus_agents} ${t("agents").toLowerCase()} · ${prevNote(c.opus_usd, pc.opus_usd)}`) +
+    tile(t("rv_mixed"), String(c.mixed_sessions), `≈ ${fmtUSD(c.mixed_usd)}`);
+  $("review-sessions").innerHTML = R.sessions.length ? table([t("rv_session"), t("tenant"), t("usd"), t("rv_resumes"), t("rv_max_ctx"), t("rv_opus"), t("rv_mix_col")],
+    R.sessions.map((x) => [x.session, x.tenant, fmtUSD(x.usd), x.resumes ? x.resumes + " · " + fmtUSD(x.resume_usd) : "–", fmtN(x.max_ctx),
+      x.opus_agents || "–", x.mixed_tenants ? t("rv_mix_tenant") : x.mixed ? t("rv_mix_project") : "–"]),
+    [false, false, true, true, true, true, false]) : "";
+  $("review-repro").innerHTML = `${t("reproduce")}: <code>sessioncoach review --date ${esc(R.run_date)}</code>`;
+}
+
+function signed(v) { return (v > 0 ? "+" : v < 0 ? "−" : "") + fmtUSD(Math.abs(v)); }
+
+function renderDayChart(d) {
+  const el = $("day-chart");
+  const W = Math.max(300, el.clientWidth || 800), H = 200, m = { l: 80, r: 12, t: 10, b: 24 };
+  const series = [["prev", "var(--s2)", t("prev_day")], ["today", "var(--s1)", d.is_today ? t("today") : t("that_day")]];
+  const max = niceMax(Math.max(1, ...d.cumulative.today, ...d.cumulative.prev));
+  const x = (h) => m.l + (h / 23) * (W - m.l - m.r), y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(t("cum"))}">`;
+  for (let i = 0; i <= 4; i++) { const v = max * i / 4, yy = y(v);
+    svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/><text x="${m.l - 8}" y="${yy + 4}" text-anchor="end">${fmtAxis(v)}</text>`; }
+  for (let h = 0; h < 24; h += 3) svg += `<text x="${x(h)}" y="${H - 6}" text-anchor="middle">${String(h).padStart(2, "0")}h</text>`;
+  series.forEach(([k, c]) => {
+    const pts = d.cumulative[k].map((v, h) => `${x(h)},${y(v)}`).join(" ");
+    if (pts) svg += `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    const last = d.cumulative[k].length - 1;
+    if (last >= 0) svg += `<circle cx="${x(last)}" cy="${y(d.cumulative[k][last])}" r="4" fill="${c}" stroke="var(--surface-1)" stroke-width="2"/>`;
+  });
+  svg += `<line id="day-cross" x1="0" x2="0" y1="${m.t}" y2="${H - m.b}" stroke="var(--text-muted)" stroke-dasharray="3 3" style="display:none"/>`;
+  svg += `<rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent" id="day-hit"/></svg><div class="tip" id="day-tip"></div>`;
+  el.innerHTML = svg;
+  const hit = $("day-hit"), tip = $("day-tip"), cross = $("day-cross");
+  hit.addEventListener("mousemove", (ev) => {
+    const bx = el.getBoundingClientRect(), px = ev.clientX - bx.left;
+    const h = Math.max(0, Math.min(23, Math.round((px - m.l) / (W - m.l - m.r) * 23)));
+    cross.setAttribute("x1", x(h)); cross.setAttribute("x2", x(h)); cross.style.display = "block";
+    tip.innerHTML = `<b>${t("hour")} ${String(h).padStart(2, "0")}:59 · ${t("cum")}</b>` + series.slice().reverse().map(([k, c, l]) =>
+      `<div class="row"><span><i style="background:${c}"></i>${esc(l)}</span><span>${d.cumulative[k][h] == null ? "–" : fmtUSD(d.cumulative[k][h])}</span></div>`).join("");
+    tip.style.display = "block"; let left = px + 14; if (left + 200 > bx.width) left = px - 214;
+    tip.style.left = left + "px"; tip.style.top = Math.max(0, ev.clientY - bx.top - 20) + "px";
+  });
+  hit.addEventListener("mouseleave", () => { tip.style.display = "none"; cross.style.display = "none"; });
+  $("day-legend").innerHTML = series.slice().reverse().map(([, c, l]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join("");
+}
+
+function hm(epoch) { return new Date(epoch * 1000).toLocaleTimeString(state.lang, { hour: "2-digit", minute: "2-digit" }); }
+function dhm(epoch) { return new Date(epoch * 1000).toLocaleString(state.lang, { weekday: "short", hour: "2-digit", minute: "2-digit" }); }
+
+function meter(label, pct, reset, eta, ths) {
+  const col = pct >= 90 ? "var(--critical)" : pct >= 75 ? "var(--warning)" : "var(--s1)";
+  const marks = (ths || []).map(Number).filter(Number.isFinite).map((th) => `<line x1="${th}" x2="${th}" y1="0" y2="14" stroke="var(--text-muted)" stroke-width="0.6"/>`).join("");
+  return `<div style="margin:8px 0">
+    <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-secondary)">${label}</span>
+      <span><b style="font-variant-numeric:tabular-nums">${Math.round(pct)}%</b> · ${t("resets")} ${label === t("w5") ? hm(reset) : dhm(reset)}</span></div>
+    <svg height="14" width="100%" preserveAspectRatio="none" viewBox="0 0 100 14"><rect x="0" y="3" width="100" height="8" rx="4" fill="var(--grid)"/>
+      <rect x="0" y="3" width="${Math.min(100, Math.max(0.5, pct))}" height="8" rx="4" fill="${col}"/>${marks}</svg>
+    ${eta ? `<div style="font-size:12px;color:var(--critical)">⚠ ${esc(t("pace_warn").replace("{e}", hm(eta)))}</div>` : ""}</div>`;
+}
+
+function bars(rows, nameFn) {
+  if (!rows || !rows.length) return `<div class="empty">–</div>`;
+  return rows.map((r, i) => `<div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 44px;gap:8px;align-items:center;margin:4px 0;font-size:13px">
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">${esc(nameFn ? nameFn(r.name) : r.name)}</span>
+    <svg height="10" width="100%" preserveAspectRatio="none" viewBox="0 0 100 10"><rect x="0" y="1" width="100" height="8" rx="4" fill="var(--grid)"/>
+      <rect x="0" y="1" width="${Math.max(0.5, r.share * 100)}" height="8" rx="4" fill="var(${SLOTS[i % SLOTS.length]})"/></svg>
+    <span style="text-align:right;font-variant-numeric:tabular-nums">${fmtPct(r.share)}</span></div>`).join("");
+}
+
+function renderLimits() {
+  const L = state.limits, el = $("limits");
+  if (!L || !L.last) { el.innerHTML = `<div class="empty">${esc(t("no_samples"))}</div>`; return; }
+  const l = L.last, th = L.thresholds || {};
+  let html = `<div class="grid2"><div>`;
+  if (l.five_pct != null) html += meter(t("w5"), l.five_pct, l.five_reset, (L.eta || {}).five_hour, th.five_hour);
+  if (l.seven_pct != null) html += meter(t("w7"), l.seven_pct, l.seven_reset, (L.eta || {}).seven_day, th.seven_day);
+  html += `<div class="repro">${t("sample_at")} ${dhm(l.ts)} · ${t("thresholds_txt")}: 5h ${esc((th.five_hour || []).join("/"))}% · 7d ${esc((th.seven_day || []).join("/"))}% · <code>sessioncoach alerts</code></div>`;
+  html += `<h3 style="font-size:14px;margin:14px 0 6px">${t("budgets")}</h3>`;
+  html += L.budgets && L.budgets.length ? table([t("type"), "", t("usd"), t("share"), t("projection")], L.budgets.map((b) => [b.name, b.period,
+      fmtUSD(b.used_usd) + " / " + fmtUSD(b.limit_usd), b.pct + "%", b.projected_pct == null ? "–" : (b.projected_pct > 100 ? "⚠ " : "") + b.projected_pct + "%"]), [false, false, true, true, true])
+    : `<div class="empty">${esc(t("no_budgets"))}</div>`;
+  html += `</div><div>`;
+  if (L.window) {
+    html += `<h3 style="font-size:14px;margin:6px 0">${t("eating")} <span class="sub">(${hm(Date.parse(L.window.start) / 1000)}–${hm(Date.parse(L.window.end) / 1000)})</span></h3>`;
+    html += `<div class="desc" style="margin:2px 0 6px">${t("by_driver")}</div>` + bars(L.window.by_driver, (n) => t("drv_" + n));
+    html += `<div class="desc" style="margin:10px 0 6px">${t("by_project")}</div>` + bars(L.window.by_project);
+    html += `<div class="desc" style="margin:10px 0 6px">${t("by_session")}</div>` + bars(L.window.by_session.slice(0, 4));
+  }
+  html += `</div></div>`;
+  el.innerHTML = html;
+}
+
+const VERDICT_COLOR = { good: "--good", bad: "--critical", costly: "--warning" };
+function tsLocal(s) { return s ? new Date(/(Z|[+-]\d\d:\d\d)$/.test(s) ? s : s + "Z") : null; }
+function whenTxt(s) { const d = tsLocal(s); return d ? d.toLocaleString(state.lang, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "–"; }
+function alertWhy(e) {
+  const d = e.data || {}, min = (v) => Math.round((v || 0) / 60);
+  const p = { idle: min(d.idle_s), ttl: min(d.limit_s || d.ttl_s || 3600), rem: min(d.remaining_s), ctx: fmtN(d.context), pct: Math.round(d.pct || 0),
+    th: d.threshold, eta: d.eta ? hm(d.eta) : "", name: d.name || "", used: fmtUSD(d.used_usd), limit: fmtUSD(d.limit_usd),
+    proj: fmtUSD(d.projected_usd), thk: fmtN(d.threshold) };
+  return (t("alw_" + e.source) || "").replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "");
+}
+function alertOutcome(o) {
+  const p = { real: fmtN(o.real_context), at: o.at || o.compacted_at ? whenTxt(o.at || o.compacted_at) : "", post: fmtN(o.post_tokens),
+    usd: fmtUSD(o.usd), exp: whenTxt(o.expires_at) };
+  const key = o.code === "false_alarm" ? "alo_false_alarm_" + o.why + (o.by ? "_" + o.by : "") : "alo_" + o.code + (o.by ? "_" + o.by : "");
+  return t(key).replace(/\{(\w+)\}/g, (_, k) => p[k] ?? "");
+}
+function renderAlerts() {
+  const A = state.alerts;
+  if (!A) { $("alerts-card").style.display = "none"; return; }
+  $("alerts-card").style.display = "";
+  const S = A.summary || {}, chip = (v, n) => `<span class="badge"><span class="dot" style="background:var(${VERDICT_COLOR[v] || "--text-muted"})"></span>${esc(t("alv_" + v))}: ${n}</span>`;
+  $("alerts-summary").innerHTML = ["good", "costly", "bad", "neutral", "pending", "info"].filter((v) => S[v]).map((v) => chip(v, S[v])).join("") +
+    (S.costly_usd ? `<span class="badge">${esc(t("al_costly_usd"))}: ${esc(fmtUSD(S.costly_usd))}</span>` : "") ||
+    `<div class="empty">${esc(t("al_none"))}</div>`;
+  const dot = (v) => `<span class="badge"><span class="dot" style="background:var(${VERDICT_COLOR[v] || "--text-muted"})"></span>${esc(t("alv_" + v))}</span>`;
+  $("alerts-events").innerHTML = A.events.length ? `<table><thead><tr>${[t("al_when"), t("al_what"), t("project"), t("al_why"), t("al_then"), ""]
+      .map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead><tbody>` + A.events.map((e) => `<tr><td>${esc(whenTxt(e.ts))}</td>
+      <td>${esc(t("als_" + e.source))}</td><td>${esc(e.project || "–")}</td><td>${esc(alertWhy(e))}</td><td>${esc(alertOutcome(e.outcome))}</td>
+      <td>${dot(e.verdict)}</td></tr>`).join("") + `</tbody></table>` : "";
+  $("alerts-missed-desc").textContent = !A.missed_since ? t("al_missed_off") : A.missed_since_first_check
+    ? t("al_missed_desc").replace("{since}", whenTxt(A.missed_since)) : t("al_missed_window").replace("{days}", A.days);
+  $("alerts-missed").innerHTML = A.missed.length ? table([t("al_when"), t("project"), t("al_ctx"), t("al_reason"), t("al_then")],
+    A.missed.map((m) => [whenTxt(m.ts), m.project, fmtN(m.context), t("alm_" + m.reason),
+      m.returned_at ? t("alo_returned_after_expiry").replace("{at}", whenTxt(m.returned_at)).replace("{usd}", fmtUSD(m.usd)) : t("alo_not_returned")]),
+    [false, false, true, false, false]) : A.missed_since ? `<div class="empty">${esc(t("al_missed_none"))}</div>` : "";
+  const na = Object.entries(A.not_applicable || {});
+  if (na.length) $("alerts-missed").innerHTML += `<p class="desc">${esc(t("al_not_applicable").replace("{list}",
+    na.map(([r, n]) => n + " " + t("alm_" + r)).join(" · ")))}</p>`;
+  $("alerts-repro").innerHTML = `${t("reproduce")}: <code>sessioncoach alert-log --days ${A.days}</code>`;
+}
+
+function table(head, rows, num) {
+  return `<table><thead><tr>${head.map((h, i) => `<th class="${num[i] ? "n" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map((r) => `<tr>${r.map((c, i) => `<td class="${num[i] ? "n" : ""}">${esc(c)}</td>`).join("")}</tr>`).join("") + `</tbody></table>`;
+}
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const k of [1, 2, 2.5, 5, 10]) if (k * p >= v) return k * p; return 10 * p; }
+function roundTop(x, y, w, h, r) { r = Math.min(r, h, w / 2); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`; }
+
+function render() {
+  if (!state.data) return;
+  renderFilters(); renderReview(); renderDay(); renderAlerts(); renderLimits(); renderTiles(); renderRecs(); renderWeekly(); renderSplit(); renderModels(); renderProjects(); renderAccounts(); renderSubagents(); renderVerify(); stVisibility();
+}
+
+$("tenant").onchange = (e) => { state.tenant = e.target.value; state.project = ""; save(); load(); };
+$("project").onchange = (e) => { state.project = e.target.value; save(); load(); };
+$("account").onchange = (e) => { state.account = e.target.value; save(); load(); };
+$("day-date").onchange = (e) => { state.date = e.target.value; load(); };
+function shiftDay(n) { const base = new Date(($("day-date").value || state.dayData.date) + "T12:00"); base.setDate(base.getDate() + n);
+  state.date = base.toISOString().slice(0, 10); load(); }
+$("day-prev").onclick = () => shiftDay(-1);
+$("day-next").onclick = () => shiftDay(1);
+$("refresh").onclick = async () => {
+  const b = $("refresh"); b.disabled = true; b.textContent = t("refreshing");
+  try { if (lostSession(await fetch("/api/refresh", { method: "POST", headers: { "X-Kit-Token": kitToken() } }))) return; await load(); } finally { b.disabled = false; b.textContent = t("refresh"); }
+};
+$("lang").onclick = () => { state.lang = state.lang === "es" ? "en" : "es"; document.documentElement.lang = state.lang; save(); state.anon ? load() : render(); };
+$("anon").onclick = () => {
+  state.anon = !state.anon; state.tenant = ""; state.project = ""; state.account = "";
+  const u = new URL(location.href); state.anon ? u.searchParams.set("anon", "1") : u.searchParams.delete("anon"); history.replaceState(null, "", u);
+  load();
+};
+$("theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark"; render();
+};
+
+// ---- Settings panel ----
+const sx = { open: false, data: null, scope: "global", preview: null, payload: null };
+const kitToken = () => (document.querySelector('meta[name="kit-token"]') || {}).content || "";
+async function sapi(method, path, body) {
+  const r = await fetch(path, { method, headers: { "X-Kit-Token": kitToken(), ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  if (lostSession(r)) throw new Error(r.statusText);
+  let j = {}; try { j = await r.json(); } catch (e) { /* no body */ }
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status });
+  return j;
+}
+function stMsg(kind, text) { $("st-msg").innerHTML = text ? `<div class="st-msg ${kind}">${esc(text)}</div>` : ""; }
+function stScopeState() { return (sx.data.scopes.find((x) => x.id === sx.scope) || sx.data.scopes[0]); }
+function stRenderScope() {
+  const sc = stScopeState(); const el = $("st-scope-body"); const proj = sc.kind === "project";
+  const blocked = proj && sc.hook_blocked_by && !sc.nudge_hook;
+  const row = (id, key, on, d, off, note) => `<div class="st-row"><label class="st-name"><input type="checkbox" id="${id}" ${on ? "checked" : ""} ${sc[key] === null || off ? "disabled" : ""}> <b>${t(key === "nudge_hook" ? "st_hook" : key === "statusline" ? "st_statusline" : "st_cut")}</b></label>` +
+    `<span class="st-state">${sc[key] === null ? "" : sc[key] ? t("st_installed") : t("st_not_installed")}</span></div><p class="st-hint">${t(d)}</p>${note || ""}`;
+  const hint = (txt) => `<p class="st-hint" role="note">${esc(txt)}</p>`;
+  let hookNote = proj ? hint(t("st_dup_rule")) : "";
+  if (blocked) hookNote += `<div class="st-msg">${esc(fill(t("st_hook_blocked"), { s: sc.hook_blocked_by }))}</div>`;
+  let slNote = proj && sc.statusline_shadows && !sc.statusline ? hint(fill(t("st_sl_shadows"), { s: sc.statusline_shadows })) : "";
+  let cutNote = "";
+  if (proj) {
+    const dest = (sc.cut_rule_in && sc.cut_rule_in[0]) || sx.dest || "local";
+    cutNote = `<div class="st-row" role="radiogroup" aria-label="${esc(t("st_cut_dest"))}"><span class="st-name">${t("st_cut_dest")}</span>` +
+      ["local", "shared"].map((k) => `<label><input type="radio" name="st-dest" id="st-dest-${k}" value="${k}" ${dest === k ? "checked" : ""}> ${t("st_dest_" + k)}</label>`).join("") + `</div>` +
+      `<p class="st-hint" id="st-dest-d">${t("st_dest_" + dest + "_d")}</p>` +
+      `<div class="st-row" id="st-gi-row" ${sc.gitignore_needed && dest === "local" ? "" : 'style="display:none"'}><label class="st-name"><input type="checkbox" id="st-gi" checked> <b>${t("st_gitignore")}</b></label></div>` +
+      `<p class="st-hint" id="st-gi-d" ${sc.gitignore_needed && dest === "local" ? "" : 'style="display:none"'}>${t("st_gitignore_d")}</p>`;
+  } else if (sc.hook_in_projects && sc.hook_in_projects.length) {
+    cutNote = "";
+    hookNote = hint(fill(t("st_hook_in_projects"), { p: sc.hook_in_projects.map((x) => x.label).join(", ") })) +
+      `<div class="st-row"><label class="st-name"><input type="checkbox" id="st-rmproj"> <b>${t("st_rm_proj")}</b></label></div>`;
+  }
+  el.innerHTML = (sc.error ? `<div class="st-msg err">${esc(fill(t("st_invalid"), { e: sc.error }))}</div>` : "") +
+    `<p class="st-hint">${t("st_file")}: <code>${esc(sc.settings_file)}</code> · <code>${esc(sc.claude_md_file)}</code>${proj ? ` · <code>${esc(sc.claude_md_shared_file)}</code>` : ""}</p>` +
+    row("st-hook", "nudge_hook", sc.nudge_hook, "st_hook_d", blocked, hookNote) + row("st-sl", "statusline", sc.statusline, "st_statusline_d", false, slNote) +
+    row("st-cut", "cut_rule", sc.cut_rule, "st_cut_d", false, cutNote);
+}
+function stRender() {
+  const d = sx.data; if (!d) return;
+  const kinds = ["global", "company", "project"];
+  const opts = kinds.map((k) => { const l = d.scopes.filter((x) => x.kind === k); return l.length ? `<optgroup label="${esc(t("st_scope_" + k))}">` +
+    l.map((x) => `<option value="${esc(x.id)}" ${x.id === sx.scope ? "selected" : ""}>${esc(x.kind === "global" ? x.label : x.label)}</option>`).join("") + `</optgroup>` : ""; }).join("");
+  const num = (id, v, lo, hi) => `<input type="number" id="${id}" value="${esc(v)}" min="${lo}" max="${hi}" step="1" inputmode="numeric">`;
+  const list = (id, v) => `<input type="text" id="${id}" value="${esc((v || []).join(", "))}" inputmode="numeric">`;
+  const chk = (id, on, label) => `<label><input type="checkbox" id="${id}" ${on ? "checked" : ""}> ${label}</label>`;
+  const a = d.alerts, n = d.nudge, r = d.review;
+  $("st-body").innerHTML =
+    `<fieldset class="st-sec"><legend>${t("st_scope")}</legend><div class="st-row"><select id="st-scope" aria-label="${esc(t("st_scope"))}">${opts}</select></div>` +
+    `<p class="st-hint">${t("st_scope_hint")}</p><div id="st-scope-body"></div></fieldset>` +
+    `<fieldset class="st-sec"><legend>${t("st_thresholds")}</legend><p class="st-hint">${t("st_th_hint")}</p>` +
+    `<div class="st-row"><span class="st-name">${t("st_five")}</span>${list("st-five", a.five_hour)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_seven")}</span>${list("st-seven", a.seven_day)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_context")}</span>${list("st-context", a.context)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_ctxtok")}</span>${list("st-ctxtok", a.context_tokens)}</div>` +
+    `<div class="st-row">${chk("st-projection", a.projection, t("st_projection"))}${chk("st-notify", a.notify, t("st_notify"))}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_lang")}</span><select id="st-lang"><option value="">${t("st_lang_auto")}</option>` +
+    `<option value="es" ${a.lang === "es" ? "selected" : ""}>ES</option><option value="en" ${a.lang === "en" ? "selected" : ""}>EN</option></select></div></fieldset>` +
+    `<fieldset class="st-sec"><legend>${t("st_nudge")}</legend>` +
+    `<div class="st-row"><span class="st-name">${t("st_idle")}</span>${num("st-idle", n.idle_min, 1, 1440)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_minctx")}</span>${num("st-minctx", n.min_context_tokens, 1000, 10000000)}</div></fieldset>` +
+    `<fieldset class="st-sec"><legend>${t("st_review")}</legend>` +
+    `<div class="st-row">${chk("st-rv-enabled", r.enabled, t("st_rv_enabled"))}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_time")}</span><input type="time" id="st-rv-time" value="${esc(r.time)}"></div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_days")}</span>${d.weekdays.map((w) => chk("st-wd-" + w, (r.days || []).includes(w), t("st_wd_" + w))).join("")}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_channels")}</span>${d.channels.map((c) => chk("st-ch-" + c, (r.channels || []).includes(c), t("st_ch_" + c))).join("")}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_lookback")}</span><select id="st-lb"><option value="last_active" ${r.lookback === "last_active" ? "selected" : ""}>${t("st_rv_last")}</option>` +
+    `<option value="n" ${r.lookback !== "last_active" ? "selected" : ""}>${t("st_rv_ndays")}</option></select>${num("st-lbn", r.lookback === "last_active" ? 1 : r.lookback, 0, 60)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_tips")}</span>${num("st-tips", r.max_tips, 1, 5)}</div>` +
+    `<div class="st-row"><span class="st-name">${t("st_rv_long")}</span>${num("st-long", r.long_context_tokens, 10000, 10000000)}</div>` +
+    `<div class="st-row">${chk("st-agent", d.review_agent, t("st_rv_agent"))}</div><p class="st-hint">${t("st_rv_agent_d")}</p></fieldset>` +
+    `<div class="st-actions"><button class="btn" type="button" id="st-defaults">${t("st_defaults")}</button>` +
+    `<button class="btn primary" type="button" id="st-preview">${t("st_preview")}</button></div>`;
+  stRenderScope();
+}
+function stNums(id) { return $(id).value.split(/[,\s]+/).filter(Boolean).map(Number); }
+function stNum(id) { const v = $(id).value; return v === "" ? null : Number(v); }
+function stPayload() {
+  const sc = stScopeState(); const p = { scope: sc.id, lang: state.lang };
+  if (sc.nudge_hook !== null && !$("st-hook").disabled) p.nudge_hook = $("st-hook").checked;
+  if (sc.statusline !== null) p.statusline = $("st-sl").checked;
+  if (sc.cut_rule !== null) p.cut_rule = $("st-cut").checked;
+  if (sc.kind === "project") {
+    p.cut_dest = $("st-dest-shared").checked ? "shared" : "local";
+    if (p.cut_rule && p.cut_dest === "local" && $("st-gi-row").style.display !== "none") p.gitignore = $("st-gi").checked;
+  } else if ($("st-rmproj")) p.remove_project_hooks = $("st-rmproj").checked && p.nudge_hook === true;
+  p.review_agent = $("st-agent").checked;
+  const days = sx.data.weekdays.filter((w) => $("st-wd-" + w).checked), chans = sx.data.channels.filter((c) => $("st-ch-" + c).checked);
+  p.alerts = { five_hour: stNums("st-five"), seven_day: stNums("st-seven"), context: stNums("st-context"), context_tokens: stNums("st-ctxtok"),
+    projection: $("st-projection").checked, notify: $("st-notify").checked, lang: $("st-lang").value || null,
+    nudge: { idle_min: stNum("st-idle"), min_context_tokens: stNum("st-minctx") },
+    review: { enabled: $("st-rv-enabled").checked, time: $("st-rv-time").value, days, channels: chans,
+      lookback: $("st-lb").value === "last_active" ? "last_active" : stNum("st-lbn"), max_tips: stNum("st-tips"), long_context_tokens: stNum("st-long") } };
+  return p;
+}
+function stClearDiff() { sx.preview = null; sx.payload = null; $("st-diff").innerHTML = ""; }
+function diffHtml(text) {
+  return text.split("\n").filter((l, i, a) => l !== "" || i < a.length - 1).map((l) => `<span class="${l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@") ? "hdr" : l[0] === "+" ? "add" : l[0] === "-" ? "del" : ""}">${esc(l) || " "}</span>`).join("");
+}
+function stShowPreview(pv) {
+  const warn = (pv.warnings || []).map((w) => `<div class="st-msg">${esc(w.code === "hook_duplicate_global" ? t("st_dup_hook") : w.code === "statusline_shadows_superior" ? fill(t("st_w_statusline"), { s: w.superior }) : w.code === "hook_in_projects" ? fill(t("st_w_projects"), { p: (w.projects || []).join(", ") }) : w.code === "legacy_agent_retired" ? fill(t("st_w_legacy_agent"), { p: w.path }) : w.code)}</div>`).join("");
+  if (!pv.files.length) { $("st-diff").innerHTML = ""; return stMsg("ok", t("st_nochanges")); }
+  $("st-diff").innerHTML = `<h3 style="font-size:14px;margin:14px 0 4px">${t("st_diff_title")}</h3><p class="st-hint">${t("st_redacted")}</p>${warn}` +
+    pv.files.map((f) => `<div class="desc" style="margin:8px 0 0"><code>${esc(f.display)}</code>${f.exists ? "" : " · " + t("st_new")}</div><pre class="diff">${diffHtml(f.diff)}</pre>`).join("") +
+    `<div class="st-actions"><button class="btn primary" type="button" id="st-apply">${t("st_apply")}</button><button class="btn" type="button" id="st-cancel">${t("st_cancel")}</button></div>`;
+  stMsg("", t("st_confirm"));
+}
+function stError(e) {
+  stMsg("err", e.status === 409 ? t("st_stale") : fill(t("st_err"), { e: e.message }));
+}
+async function stLoad() {
+  try { sx.data = await sapi("GET", "/api/settings"); if (!sx.data.scopes.some((x) => x.id === sx.scope)) sx.scope = "global"; stRender(); }
+  catch (e) { stError(e); }
+}
+function stVisibility() {
+  const show = !state.anon && !(state.data && state.data.demo);  // the demo never edits the real settings
+  $("settings-btn").style.display = show ? "" : "none";
+  $("settings-btn").textContent = t("settings");
+  $("settings-btn").setAttribute("aria-expanded", String(show && sx.open));
+  $("settings-card").style.display = show && sx.open ? "" : "none";
+  if (!show) { sx.open = false; sx.data = null; $("st-body").innerHTML = ""; stClearDiff(); stMsg("", ""); }
+  else if (sx.open && sx.data && sx.lang !== state.lang) { sx.lang = state.lang; stClearDiff(); stMsg("", ""); stRender(); }
+}
+$("settings-btn").onclick = async () => {
+  sx.open = !sx.open; sx.lang = state.lang; stVisibility();
+  if (sx.open) { await stLoad(); $("settings-card").scrollIntoView({ behavior: "smooth", block: "start" }); }
+};
+const stCard = $("settings-card");
+stCard.addEventListener("input", () => { if (sx.preview) { stClearDiff(); stMsg("", ""); } });
+stCard.addEventListener("change", (e) => {
+  if (e.target.name === "st-dest") {
+    sx.dest = e.target.value; const sc = stScopeState(); const loc = sx.dest === "local";
+    $("st-dest-d").textContent = t("st_dest_" + sx.dest + "_d");
+    $("st-gi-row").style.display = $("st-gi-d").style.display = loc && sc.gitignore_needed ? "" : "none";
+  }
+  if (e.target.id === "st-scope") { sx.dest = null; sx.scope = e.target.value; stClearDiff(); stMsg("", ""); stRenderScope(); }
+});
+stCard.addEventListener("click", async (e) => {
+  const id = e.target.id; if (!id || !id.startsWith("st-")) return;
+  if (id === "st-defaults") {
+    const df = sx.data.defaults; Object.assign(sx.data.alerts, df.alerts, { lang: null }); Object.assign(sx.data.nudge, df.nudge); Object.assign(sx.data.review, df.review);
+    const keep = sx.scope; stClearDiff(); stMsg("", ""); stRender(); sx.scope = keep;
+  } else if (id === "st-preview") {
+    e.target.disabled = true; stMsg("", t("st_working"));
+    try { sx.payload = stPayload(); sx.preview = await sapi("POST", "/api/settings/preview", sx.payload); stShowPreview(sx.preview); }
+    catch (err) { stClearDiff(); stError(err); } finally { e.target.disabled = false; }
+  } else if (id === "st-cancel") { stClearDiff(); stMsg("", ""); }
+  else if (id === "st-apply" && sx.preview) {
+    e.target.disabled = true; stMsg("", t("st_working"));
+    try {
+      const body = { ...sx.payload, files: sx.preview.files.map((f) => ({ path: f.path, before: f.before, after: f.after })) };
+      const res = await sapi("POST", "/api/settings/apply", body);
+      stClearDiff(); await stLoad();
+      stMsg("ok", fill(t("st_applied"), { b: res.applied.map((a) => a.backup || t("st_no_backup")).join(" · ") }));
+    } catch (err) { e.target.disabled = false; if (err.status === 409) stClearDiff(); stError(err); }
+  }
+});
+window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(() => { renderWeekly(); if (state.dayData) renderDayChart(state.dayData); }, 150); });
+load();
+</script>
+</body>
+</html>

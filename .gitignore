@@ -1,0 +1,27 @@
+__pycache__/
+*.py[oc]
+*.db
+*.db-*
+.kit/
+.playwright-mcp/
+.DS_Store
+build/
+dist/
+*.egg-info/
+*.bak*
+.venv/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+.pytest_cache/
+
+# worktrees of agents working on this repo
+.claude/worktrees/
+
+# local folders of other coding agents
+.crush/
+.codex/
+.gemini/
+.qwen/
+.cursor/

@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sessioncoach"
+dynamic = ["version"]
+description = "Honest, local-only measurement of what Claude Code costs, with what to change."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.9"
+dependencies = []
+authors = [{ name = "macurandb" }]
+keywords = ["claude", "claude-code", "cost", "tokens", "prompt-cache", "cli", "dashboard"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/macurandb/sessioncoach"
+Issues = "https://github.com/macurandb/sessioncoach/issues"
+Changelog = "https://github.com/macurandb/sessioncoach/blob/main/CHANGELOG.md"
+
+[project.scripts]
+sessioncoach = "sessioncoach.cli:main"
+
+[tool.setuptools]
+packages = ["sessioncoach"]
+
+[tool.setuptools.package-data]
+sessioncoach = ["web/*.html"]
+
+[tool.setuptools.dynamic]
+version = {attr = "sessioncoach.__version__"}
+
+[dependency-groups]
+dev = [
+    "coverage>=7.10.7",
+    "pytest>=8.4.2",
+    "ruff>=0.17.0",
+]
+
+# Coverage rule of this repo: >= 85 % of the package, branches included (CONTRIBUTING.md).
+[tool.coverage.run]
+source = ["sessioncoach"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # `pytest` without installing the package (e.g. uvx pytest) still imports sessioncoach
+
+[tool.ruff]
+target-version = "py39"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "PL", "RUF", "I"]
+ignore = [
+    "UP031",    # %-formatting is this codebase's one string-formatting idiom; mixing in f-strings piecemeal hurts more than it helps
+    "PLC0415",  # imports inside functions are deliberate: `hook prompt` and `statusline` run on every prompt and must start fast
+    "PLR2004",  # magic-value comparisons: thresholds are compared next to the setting they come from
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",  # size/complexity: tracked as refactors (CONTRIBUTING.md), not hidden
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR6301", "E402"]
