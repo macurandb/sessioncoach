@@ -12,7 +12,7 @@ import datetime as dt
 import json
 import statistics
 
-from . import pricing
+from . import accounts, paths, pricing
 
 
 def parse_ts(s):
@@ -63,23 +63,30 @@ def session_roots(con):
 
 
 def rebuild_slices(con):
-    """Recompute cost_slices (day, project, session, model, usd, estimated) from scratch.
+    """Recompute cost_slices (day, project, session, model, usd, estimated, login) from scratch.
 
     cost-state counts only what the current Claude Code process spent. When an interval holds
     more activity than its increase can explain (the session started before cost-state was
     written, or the counter restarted), the increase is spread over the most recent activity
     that it covers, and the older activity is estimated at list price instead of being lost.
+    A slice also keeps the login its config dir had (login_at), so a switch of account splits it.
     """
     con.execute("DELETE FROM cost_slices")
     out = collections.defaultdict(float)
+    clock = accounts.LoginClock(list(con.execute("SELECT root, seen_at FROM accounts_seen")), paths.default_root())
 
-    def estimate(items, pdir, sid):
+    def estimate(items, pdir, sid, slot):
         for t, model, w in items:
             if w:
-                out[(t.date().isoformat(), pdir, sid, pricing.base_model(model), 1)] += w
+                out[(*slot(t), pdir, sid, pricing.base_model(model), 1)] += w
 
     root_of = session_roots(con)
     for (pdir, sid), snaps, act in _sessions(con):
+        root = root_of.get((pdir, sid))
+
+        def slot(t, root=root):
+            return t.date().isoformat(), clock(root, t)
+
         chain = [(act[0][0] - dt.timedelta(seconds=1), 0.0, {}), *snaps]
         for (t0, c0, m0), (t1, c1, m1) in zip(chain, chain[1:]):
             jump = increment(c0, c1)
@@ -87,14 +94,14 @@ def rebuild_slices(con):
             if jump <= 0 or not inside:
                 continue
             covered, older = _cover(jump, inside)
-            estimate(older, pdir, sid)
+            estimate(older, pdir, sid, slot)
             base = m0 if c1 >= c0 else {}
-            for (day, label), usd in _spread(jump, covered, base, m1).items():
-                out[(day, pdir, sid, label, 0)] += usd
-        estimate([a for a in act if a[0] > chain[-1][0]], pdir, sid)
-    con.executemany("INSERT INTO cost_slices (day, project_dir, session_id, model, usd, estimated, root) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    [(k[0], k[1], k[2], k[3], v, k[4], root_of.get((k[1], k[2]))) for k, v in out.items() if v])
+            for ((day, login), label), usd in _spread(jump, covered, base, m1, slot).items():
+                out[(day, login, pdir, sid, label, 0)] += usd
+        estimate([a for a in act if a[0] > chain[-1][0]], pdir, sid, slot)
+    con.executemany("INSERT INTO cost_slices (day, project_dir, session_id, model, usd, estimated, root, login_at) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    [(k[0], k[2], k[3], k[4], v, k[5], root_of.get((k[2], k[3])), k[1]) for k, v in out.items() if v])
     con.commit()
 
 
@@ -109,8 +116,8 @@ def _cover(jump, inside):
     return inside[i:], inside[:i]
 
 
-def _spread(jump, inside, m0, m1):
-    """Split one cost-state jump over the requests inside it, per model, by weight."""
+def _spread(jump, inside, m0, m1, slot):
+    """Split one cost-state jump over the requests inside it, per model, by weight, keyed by slot(time)."""
     res = collections.defaultdict(float)
     deltas = {}
     for label, mu in m1.items():
@@ -125,11 +132,11 @@ def _spread(jump, inside, m0, m1):
         w_all = sum(a[2] for a in mine) or float(len(mine))
         for t, _, w in mine:
             share = d * scale * ((w or 0) / w_all if w_all else 1.0 / len(mine))
-            res[(t.date().isoformat(), label.replace("claude-", ""))] += share
+            res[(slot(t), label.replace("claude-", ""))] += share
     if not deltas:  # no per-model data: spread the whole jump by weight, labelled by request model
         w_all = sum(a[2] for a in inside) or float(len(inside))
         for t, model, w in inside:
-            res[(t.date().isoformat(), pricing.base_model(model))] += jump * ((w or 0) / w_all if w_all else 1.0 / len(inside))
+            res[(slot(t), pricing.base_model(model))] += jump * ((w or 0) / w_all if w_all else 1.0 / len(inside))
     return res
 
 

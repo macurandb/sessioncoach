@@ -77,7 +77,8 @@ SUB_COLS = ("project_dir", "session_id", "agent_id", "subagent_type", "model", "
 # Additive migrations: columns added after the first release. Rows that predate a column keep
 # NULL, which readers treat as the default transcript root.
 MIGRATIONS = (("requests", "root", "TEXT"), ("cost_state", "root", "TEXT"), ("subagents", "root", "TEXT"),
-              ("accounts_seen", "extra_usage", "INTEGER"), ("tool_calls", "msg_id", "TEXT"))
+              ("accounts_seen", "extra_usage", "INTEGER"), ("tool_calls", "msg_id", "TEXT"),
+              ("cost_slices", "login_at", "TEXT"))
 
 
 BUSY_TIMEOUT_S = 15  # how long a writer waits for another one (ingest, refresh, status line) before giving up
@@ -140,20 +141,27 @@ def connect(path, timeout=BUSY_TIMEOUT_S):
     con.row_factory = sqlite3.Row
     _enable_wal(con, timeout)
     con.executescript(SCHEMA)
-    for table, col, typ in MIGRATIONS:
-        cols = {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
-        if col not in cols:
-            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
-    slice_cols = {r[1] for r in con.execute("PRAGMA table_info(cost_slices)")}
-    if "root" not in slice_cols:  # derived table: safe to recreate
+    if "root" not in columns(con, "cost_slices"):  # derived table: safe to recreate
         con.execute("DROP TABLE cost_slices")
         con.execute("CREATE TABLE cost_slices (day TEXT NOT NULL, project_dir TEXT NOT NULL, session_id TEXT NOT NULL, "
                     "model TEXT NOT NULL, usd REAL NOT NULL, estimated INTEGER NOT NULL, root TEXT)")
         con.execute("CREATE INDEX IF NOT EXISTS cost_slices_day ON cost_slices(day)")
+    for table, col, typ in MIGRATIONS:
+        if col not in columns(con, table):
+            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, typ))
     if con.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
         con.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
     con.commit()
     return con
+
+
+def columns(con, table):
+    return {r[1] for r in con.execute("PRAGMA table_info(%s)" % table)}
+
+
+def login_col(con):
+    """login_at of cost_slices, or NULL for a database opened read-only before its migration."""
+    return "login_at" if "login_at" in columns(con, "cost_slices") else "NULL AS login_at"
 
 
 def files_seen(con):

@@ -299,6 +299,63 @@ class TestTransition(Base):
         self.assertEqual(before["alignment"]["overall_pct"], 0.0)
 
 
+class TestAccountSwitch(Base):
+    """One config dir logged into one account, then into another (/login): cost follows the time."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("s1.jsonl", [usage_line("2026-10-01T10:00:00Z", "a"), cost_line(2.0),
+                                usage_line("2026-10-01T20:00:00Z", "b"), cost_line(5.0)])
+        self.con, _ = self.ingest()
+        for at, h, t in (("2026-01-01T00:00:00+00:00", "h1", "claude_max"), ("2026-10-01T15:00:00+00:00", "h2", "claude_team")):
+            store.add_account_seen(self.con, self.projects, {"org_hash": h, "org_type": t}, at)
+        cost.rebuild_slices(self.con)
+        self.lab = Labeler([{"match": "*", "project": "demo", "tenant": "acme"}])
+        self.res = accounts.AccountResolver(list(self.con.execute("SELECT * FROM accounts_seen")),
+                                            {"me": {"label": "Me", "company": "personal", "org_hash": "h1"},
+                                             "team": {"label": "Team", "company": "acme", "org_hash": "h2"}}, self.projects)
+
+    def tearDown(self):
+        self.con.close()
+        super().tearDown()
+
+    def build(self, **kw):
+        return analysis.build(self.con, days=None, labeler=self.lab, resolver=self.res, **kw)
+
+    def test_cost_splits_at_the_switch(self):
+        usd = {a["id"]: a["usd"] for a in self.build()["accounts"]}
+        self.assertEqual(usd, {"me": 2.0, "team": 3.0})
+        self.assertEqual(self.res.ids(self.projects), {"me", "team"})
+        r14 = [r for r in self.build()["recommendations"] if r["id"] == "R14"]
+        self.assertEqual([r["params"]["usd"] for r in r14], [2.0])  # only the personal part is the other company's
+
+    def test_account_filter_keeps_only_its_part(self):
+        for acc, usd in (("team", 3.0), ("me", 2.0)):
+            s = self.build(account=acc)["summary"]
+            self.assertAlmostEqual(s["total_usd"], usd, places=2)
+            self.assertEqual(s["requests"], 1)
+        self.assertEqual({a["id"] for a in self.build()["options"]["accounts"]}, {"me", "team"})
+
+    def test_day_and_anonymous_mode_see_both(self):
+        r = analysis.day(self.con, date=cost.parse_ts("2026-10-01T10:00:00Z").date(), labeler=self.lab, resolver=self.res,
+                         now=cost.parse_ts("2026-10-03T12:00:00Z"))
+        self.assertEqual({a["id"]: a["today"] for a in r["accounts"]}, {"me": 2.0, "team": 3.0})
+        from sessioncoach import anon
+        a = anon.Anonymizer(self.con, [], lang="en", labeler=self.lab, resolver=self.res)
+        self.assertEqual({a.map["me"], a.map["team"]}, {"Account 1", "Account 2"})
+
+    def test_requests_follow_their_own_time(self):
+        dims = analysis.Dims(self.con, self.lab, self.res)
+        rows = list(self.con.execute("SELECT * FROM requests ORDER BY ts"))
+        self.assertEqual([dims(r)[2]["id"] for r in rows], ["me", "team"])
+
+    def test_clock_before_first_login_and_bad_time(self):
+        clock = accounts.LoginClock([{"root": "r", "seen_at": "2026-10-01T15:00:00+00:00"}, {"root": "r", "seen_at": "bad"}])
+        self.assertIsNone(clock("r", cost.parse_ts("2026-09-01T00:00:00Z")))
+        self.assertEqual(clock("r", cost.parse_ts("2026-10-02T00:00:00Z")), "2026-10-01T15:00:00+00:00")
+        self.assertIsNone(clock("other", cost.parse_ts("2026-10-02T00:00:00Z")))
+
+
 class TestDay(Base):
     def test_hourly_adds_up_and_prev_day(self):
         self.write("s1.jsonl", [usage_line("2026-10-01T09:00:00Z", "a"), usage_line("2026-10-01T15:00:00Z", "b"),
@@ -330,6 +387,7 @@ class TestMigration(Base):
         cols = {r[1] for r in con.execute("PRAGMA table_info(requests)")}
         self.assertIn("root", cols)
         self.assertEqual(con.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 1)
+        self.assertTrue({"root", "login_at"} <= store.columns(con, "cost_slices"))  # recreated, then migrated
         collect.backfill_roots(con, "/default/root")
         self.assertEqual(con.execute("SELECT root FROM requests").fetchone()[0], "/default/root")
 

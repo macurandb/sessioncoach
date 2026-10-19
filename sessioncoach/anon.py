@@ -8,6 +8,7 @@ import collections
 import re
 import string
 
+from . import store
 from .analysis import Dims
 
 LABELS = {"es": ("Proyecto", "Empresa", "Cuenta", "Presupuesto"), "en": ("Project", "Workspace", "Account", "Budget")}
@@ -30,7 +31,8 @@ class Anonymizer:
         dims = Dims(con, labeler, resolver)
         proj, ten, acc = collections.Counter(), collections.Counter(), collections.Counter()
         acc_names, dir_to_proj = {}, {}
-        for s in con.execute("SELECT project_dir, root, SUM(usd) AS usd FROM cost_slices GROUP BY project_dir, root"):
+        for s in con.execute("SELECT project_dir, root, %s, SUM(usd) AS usd FROM cost_slices "
+                             "GROUP BY project_dir, root, login_at" % store.login_col(con)):
             p, t, a = dims(s)
             proj[p] += s["usd"]
             ten[t] += s["usd"]

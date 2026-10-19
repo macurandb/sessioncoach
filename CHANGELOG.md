@@ -9,6 +9,7 @@ First public release.
   models, timestamps), keeps the history after Claude Code deletes old transcripts, and skips files that did not change.
 - Cost per day, week, project, company (tenant) and Claude account, split into *recorded* (Claude Code's own
   `cost-state`) and *estimated* (list price), with a backtest and a conservation check (`sessioncoach verify`).
+- A config dir that switches accounts (`/login`) splits its cost at the switch, as seen by the next ingest.
 - Local dashboard (`sessioncoach dashboard`, 127.0.0.1 only, secret link + session cookie + CSRF token), `report`,
   `day` and `tools` in the terminal. English and Spanish.
 - Recommendations from deterministic rules: resumes after the prompt cache expired (R1), 1M-context variants (R2),

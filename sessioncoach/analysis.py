@@ -7,7 +7,7 @@ activity), `estimated` (list price, after the last cost-state snapshot) or `list
 import collections
 import datetime as dt
 
-from . import accounts, config, cost, paths, pricing, rules
+from . import accounts, config, cost, paths, pricing, rules, store
 from .projects import UNASSIGNED, Labeler
 
 TOP_PROJECTS = 7          # stacked chart keeps 7 projects + "other" (8 categorical slots)
@@ -110,8 +110,13 @@ class Dims:
             list(con.execute("SELECT * FROM accounts_seen")), accounts.load_map(), paths.default_root())
 
     def __call__(self, row, ts=None):
+        """The account is the one the row's config dir was logged into at the row's time: login_at for a
+        cost slice, ts for a request or a subagent (the earliest login when the row has neither)."""
         p, t = self.labeler(row["project_dir"])
-        root = row["root"] if "root" in row.keys() else None  # noqa: SIM118 (sqlite3.Row: `in` would search values, not column names)
+        keys = row.keys()
+        root = row["root"] if "root" in keys else None
+        if ts is None:
+            ts = next((row[k] for k in ("login_at", "ts") if k in keys and row[k]), None)
         return p, t, self.resolver(root, ts)
 
     def scope(self, con, tenant=None, project=None, account=None, tables=("cost_slices", "requests", "subagents")):
@@ -131,9 +136,10 @@ class Dims:
                 params += ok
         if account:
             roots = {r[0] for t in tables for r in con.execute("SELECT DISTINCT root FROM %s" % t)}
-            ok = sorted(r for r in roots if r is not None and self.resolver(r, None)["id"] == account)
+            # a root that switched accounts holds rows of each: it stays in, the Python filter splits it
+            ok = sorted(r for r in roots if r is not None and account in self.resolver.ids(r))
             if len(ok) <= MAX_IN:
-                null_ok = self.resolver(None, None)["id"] == account  # NULL root = the default transcript root
+                null_ok = account in self.resolver.ids(None)  # NULL root = the default transcript root
                 sql.append("(root IN (%s)%s)" % (",".join("?" * len(ok)), " OR root IS NULL" if null_ok else ""))
                 params += ok
         return " AND ".join(sql), params
@@ -298,7 +304,7 @@ def recommendations(cur, reqs, subs, long_context=None):
 
 def _options(con, dims):
     tenants, projects, accts = set(), set(), {}
-    for row in con.execute("SELECT DISTINCT project_dir, root FROM cost_slices"):
+    for row in con.execute("SELECT DISTINCT project_dir, root, %s FROM cost_slices" % store.login_col(con)):
         p, t, a = dims(row)
         tenants.add(t)
         projects.add(p)

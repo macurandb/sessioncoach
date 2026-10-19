@@ -15,6 +15,7 @@ An account may declare accepted transitions: work of another company that runs o
 until a date, e.g. "transition": [{"tenant": "acme", "until": "2026-10-31"}]. While a transition
 is current the mismatch is reported as acknowledged, not as a warning.
 """
+import datetime as dt
 import hashlib
 import os
 
@@ -50,6 +51,39 @@ def load_map(path=None):
     return {k: v for k, v in accs.items() if isinstance(v, dict)} if isinstance(accs, dict) else {}
 
 
+class LoginClock:
+    """(root, time) -> seen_at of the login a config dir had at that time, None before the first one.
+
+    A config dir can switch accounts (/login). Each switch is recorded by the next ingest, so the
+    time is that of the ingest, not of the login: activity in between counts for the old account.
+    """
+
+    def __init__(self, seen_rows, default_root=None):
+        self.default_root = default_root
+        self.history = {}
+        for r in seen_rows:
+            t = _parse(r["seen_at"])
+            if t:
+                self.history.setdefault(r["root"], []).append((t, r["seen_at"]))
+        for h in self.history.values():
+            h.sort()
+
+    def __call__(self, root, t):
+        out = None
+        for at, seen_at in self.history.get(root or self.default_root) or []:
+            if at > t:
+                break
+            out = seen_at
+        return out
+
+
+def _parse(s):
+    try:
+        return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+
+
 class AccountResolver:
     """(root, ts) -> account dict {id, label, company, org_type, seat_tier}."""
 
@@ -62,6 +96,11 @@ class AccountResolver:
         for h in self.history.values():
             h.sort(key=lambda x: x[0])
         self.default_root = default_root
+
+    def ids(self, root):
+        """Every account id the config dir that owns `root` has been logged into."""
+        h = self.history.get(root or self.default_root) or []
+        return {self(root, at)["id"] for at, _row in h} if h else {self(root)["id"]}
 
     def __call__(self, root, ts=None):
         root = root or self.default_root
