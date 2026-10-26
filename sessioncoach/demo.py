@@ -219,9 +219,10 @@ class Generator:
         t = self.now - dt.timedelta(hours=3, minutes=20)
         others = [p[0] for p in PROJECTS if p[0] != proj[0]]
         while t < self.now - dt.timedelta(minutes=3):
-            t = self._burst(s, t, ttl, self.now - dt.timedelta(minutes=2), others) + dt.timedelta(minutes=rng.uniform(1, 6))
+            end = self._burst(s, t, ttl, self.now - dt.timedelta(minutes=2), others)
+            t = end + dt.timedelta(minutes=rng.uniform(1, 6))
             if rng.random() < 0.5:
-                self._cost_state(s, t)
+                self._cost_state(s, end)  # at the end of the burst, as run_day: the next burst's first request is after it
 
 
 def _local(day, hour):

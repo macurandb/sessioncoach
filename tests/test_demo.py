@@ -90,6 +90,17 @@ class TestDemo(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertNotEqual(a, other)
 
+    def test_the_live_session_passes_the_backtest_at_any_hour(self):
+        # its cost snapshots were dated after the next burst's first request: a third of the hours of a day gave
+        # CHECK (the CLI test of verify failed from 16:07 UTC on)
+        for now in (dt.datetime(2026, 10, 26, 16, 7, tzinfo=dt.timezone.utc), dt.datetime(2026, 10, 26, 18, 7, tzinfo=dt.timezone.utc),
+                    dt.datetime(2026, 10, 26, 23, 37, tzinfo=dt.timezone.utc), self.NOW):
+            c = self.con(demo.build(self.dest, days=6, seed=3, now=now))
+            try:
+                self.assertEqual(cost.verify(c)["backtest"], "PASS", now)
+            finally:
+                c.close()
+
     def test_goes_through_the_real_pipeline_and_fills_every_view(self):
         db = demo.build(self.dest, days=30, seed=7, now=self.NOW)
         os.environ["KIT_DATA_DIR"] = self.dest
