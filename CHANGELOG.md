@@ -27,8 +27,8 @@ First public release.
 - Handoffs: `/handoff [topic]` (`handoff-install`) has Claude write `docs/HANDOFF-<date>-<topic>.md`; the resume hook
   (`resume-hook-install`, `SessionStart`) gives the session after `/clear` the newest handoff of its project from the
   last 24 h (never one tracked by git). In the VS Code extension and the desktop app, whose `/clear` starts a new
-  session, it gives a handoff written in the last 30 min that no session got yet, so an old one never reaches a new
-  window.
+  session, it gives a handoff written in the last 30 min that no session got yet (once), so an old one never reaches
+  a new window.
 - `/keep-context [off]` keeps one session's whole context through Claude Code's idle summary; `sessioncoach
   idle-compact` tells, from your own returns, whether `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` pays off.
 - Plan limits and alerts in the status line (`statusline-install`, chained after your own status line), notifications

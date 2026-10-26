@@ -1,3 +1,4 @@
+import contextlib
 import io
 import json
 import os
@@ -14,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import isolate
 
-from sessioncoach import cli, handoff, hooks, installer, nudge, resume, settings
+from sessioncoach import cli, handoff, hooks, installer, nudge, resume, settings, statefile
 
 
 def write(path, text, age_s=0):
@@ -189,6 +190,33 @@ class Hook(Base):
         write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=resume.FRESH_S + 60)
         self.assertEqual(self.run_hook({"source": "startup", "cwd": self.repo}), "")
         self.assertEqual(resume.LOADED.load(), [])  # nothing given, nothing noted
+
+    def test_a_plain_new_window_writes_nothing(self):
+        write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=resume.FRESH_S + 60)
+        before = sorted(os.path.join(d, f) for d, _, fs in os.walk(self.home) for f in fs)
+        self.assertEqual(self.run_hook({"source": "startup", "cwd": self.repo}), "")
+        self.assertEqual(sorted(os.path.join(d, f) for d, _, fs in os.walk(self.home) for f in fs), before)
+
+    def test_a_handoff_that_cannot_be_read_is_not_used_up(self):
+        p = write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=60)
+        startup = {"source": "startup", "cwd": self.repo}
+        with mock.patch.object(resume, "context", side_effect=OSError("gone")):
+            self.assertEqual(self.run_hook(startup), "")
+        self.assertEqual(resume.LOADED.load(), [])
+        self.assertIn(p, self.run_hook(startup))
+
+    def test_without_the_lock_a_new_window_gets_nothing_and_the_clis_clear_still_does(self):
+        write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=60)
+
+        @contextlib.contextmanager
+        def busy(_path, timeout=None):
+            yield False
+        with mock.patch.object(statefile, "locked", busy):
+            self.assertEqual(self.run_hook({"source": "startup", "cwd": self.repo}), "")
+            self.assertNotEqual(self.run_hook({"source": "clear", "cwd": self.repo}), "")
+
+    def test_give_is_false_for_a_file_gone_in_between(self):
+        self.assertFalse(resume.give(os.path.join(self.repo, "docs", "HANDOFF-gone.md"), False))
 
     def test_a_handoff_given_on_clear_is_not_given_again_to_a_new_window(self):
         write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=60)

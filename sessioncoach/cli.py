@@ -484,7 +484,8 @@ VALUE = {
 # The technical side, after the options: which files a command writes, where, and how to undo it.
 DETAIL = {
     "ingest": "Reads ~/.claude/projects (or CLAUDE_CONFIG_DIR, SESSIONCOACH_PROJECTS_DIRS) into <data dir>/metrics.db. "
-              "Only metadata is kept (counts, models, times, ids, names), never session content. Each run also checks budgets, the cache-expiry warning and a missed review.",
+              "Only metadata is kept (counts, models, times, ids, names), never session content. Each run also checks "
+              "budgets, the cache-expiry warning and a missed review.",
     "statusline-install": "Edits the statusLine of ~/.claude/settings.json (backup .bak-statusline); your previous command keeps "
                           "running first, from a chain file in the data dir. Undo: sessioncoach statusline-uninstall.",
     "hook-install": "Adds a UserPromptSubmit hook to ~/.claude/settings.json (backup .bak-hook). It is shown to you, never to the "

@@ -27,7 +27,8 @@ expected saving (always labelled as an estimate) and how to check afterwards tha
 > each other, not with your invoice.
 
 Status: early preview (0.1.0); interfaces may change. sessioncoach reads Claude Code's local transcripts, an internal
-format that Claude Code does not document and may change; `sessioncoach verify` shows how much of it it could read.
+format that Claude Code does not document and may change; `sessioncoach verify` checks the figures (a backtest
+against Claude Code's own cost counter, a conservation check, and models with no exact price).
 Works on macOS and Linux (and WSL). Windows support is experimental: covered by tests and CI, not yet used day to day
 (reports welcome).
 
@@ -48,8 +49,9 @@ Open a new terminal (so `pipx ensurepath` takes effect), then:
 pipx install git+https://github.com/macurandb/sessioncoach
 ```
 
-Or run it from a clone, with no install: `git clone https://github.com/macurandb/sessioncoach` and use
-`bin/sessioncoach` wherever this page says `sessioncoach`.
+To upgrade later: `pipx reinstall sessioncoach`. Or run it from a clone, with no install:
+`git clone https://github.com/macurandb/sessioncoach && cd sessioncoach`, then use `bin/sessioncoach` (on Windows,
+`py bin/sessioncoach`) wherever this page says `sessioncoach`.
 
 ## First result in two minutes
 
@@ -61,11 +63,14 @@ sessioncoach dashboard   # the same in your browser; stays running until Ctrl+C
 sessioncoach check       # verify what setup installed (read-only)
 ```
 
+The report needs some Claude Code history on this machine. To look around first, `sessioncoach demo` opens the
+dashboard on synthetic data without touching yours.
+
 `setup` offers each piece separately and none of them is required:
 
 - a scheduled `ingest`, every 30 minutes, so your history outlives Claude Code's 30-day transcript retention;
-- the **resume warning**: before a prompt writes a big expired cache again, it tells you what that costs and what to
-  type instead (shown to you, never to the model);
+- the **resume warning**: before a prompt writes a big expired cache again, it tells you how long you were away, how
+  much context it will re-read, and what to type instead (shown to you, never to the model);
 - plan limits and alerts in the **status line** (chained after your own status line, which keeps running);
 - a **daily review**: yesterday's numbers and one change for today, as a notification and in the dashboard;
 - **`/handoff`**: Claude writes the state of the session to `docs/HANDOFF-<date>-<topic>.md`, and after `/clear` the
@@ -89,7 +94,7 @@ daily review arrives on weekdays at 08:00. When you want detail:
 ## Uninstall
 
 ```bash
-sessioncoach uninstall --all        # hooks, status line, /handoff and scheduled jobs, in every settings scope
+sessioncoach uninstall --all        # hooks, status line, commands, scheduled jobs and state, in every settings scope
 pipx uninstall sessioncoach         # the tool itself
 ```
 
@@ -181,7 +186,7 @@ python3 -m unittest discover -s tests      # without uv
 ```
 
 `scripts/leakcheck.py` checks that no string from a private list kept outside the repo got in
-(`SESSIONCOACH_PRIVATE_STRINGS=/path/to/list`); without a list it does nothing.
+(`SESSIONCOACH_PRIVATE_STRINGS=/path/to/list`); without a list it checks nothing and exits 2.
 
 Roadmap: isolated workspaces for people working with several clients; later, OpenTelemetry export, a team view
 (metrics only) and an optional Docker image of the dashboard.

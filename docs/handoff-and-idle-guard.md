@@ -40,7 +40,9 @@ the hook itself decides from the session's `source`.
   project (the working dir up to the repository root) written in the last 24 hours.
 - **VS Code extension and desktop app** (`/clear` there starts a new session, source `startup`): the same, but only
   for a handoff written in the last 30 minutes that no session got yet, so `/handoff` then `/clear` works there too
-  and a window you open later never gets an old handoff.
+  and a window you open later never gets an old handoff. Claude Code does not tell a `/clear` from a new window, so
+  any new session of the project in those 30 minutes gets it (once): open the new session from the one that wrote
+  it.
 - **`resume` and `compact`**: nothing; the context is still there.
 
 The text is cut to 9,000 characters (Claude Code caps hook context at 10,000; the path is there for the rest) and

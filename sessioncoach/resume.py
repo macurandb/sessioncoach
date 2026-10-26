@@ -117,19 +117,22 @@ path, remove = LOADED.path, LOADED.remove  # uninstall: -> True when there was a
 
 
 def give(path, fresh_only, now=None):
-    """Note that handoff `path` goes to a session, under the state file's lock. -> False, noting nothing, when
-    `fresh_only` (a "startup") and the file is older than FRESH_S or some session already got this version of it."""
+    """Note that handoff `path` goes to a session. -> False, noting nothing, when `fresh_only` (a "startup") and the
+    file is older than FRESH_S, some session already got this version of it, or the state file's lock cannot be taken
+    (two windows starting at once must not both get it)."""
     now = now or time.time()
-    mtime = os.path.getmtime(path)
-    given = []
-
-    def change(es):
-        if fresh_only and (now - mtime > FRESH_S or any(e["path"] == path and e["mtime"] == mtime for e in es)):
-            return es
-        given.append(True)
-        return [e for e in es if e["path"] != path] + [{"path": path, "mtime": mtime, "at": now}]
-    LOADED.update(change, now)
-    return bool(given)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return False
+    if fresh_only and now - mtime > FRESH_S:  # a plain new window: nothing to give, nothing to write
+        return False
+    with statefile.locked(LOADED.lock_path()) as held:
+        es = LOADED.load()
+        if fresh_only and (not held or any(e["path"] == path and e["mtime"] == mtime for e in es)):
+            return False
+        LOADED.save([e for e in es if e["path"] != path] + [{"path": path, "mtime": mtime, "at": now}], now)
+    return True
 
 
 def context(path, now=None):
@@ -173,9 +176,15 @@ def evaluate(data, now=None):
             text = digest_context(entry, data["cwd"], path, now)
             if text:
                 return {"hookSpecificOutput": {"hookEventName": HOOK_EVENT, "additionalContext": text}}
-    if not path or not give(path, source == GUARDED and not entry, now):
+    if not path:
         return None
-    return {"hookSpecificOutput": {"hookEventName": HOOK_EVENT, "additionalContext": context(path, now)}}
+    try:
+        text = context(path, now)  # read before it is noted as given: a file that cannot be read is not used up
+    except OSError:
+        return None
+    if not give(path, source == GUARDED and not entry, now):
+        return None
+    return {"hookSpecificOutput": {"hookEventName": HOOK_EVENT, "additionalContext": text}}
 
 
 def hook_main():

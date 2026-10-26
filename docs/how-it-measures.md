@@ -37,7 +37,8 @@ under-count output tokens.
   it with a figure built from recorded cost only.
 - **Cache lifetime (TTL)**: "cache expired" uses the TTL each transcript really wrote (`ephemeral_1h` = 1 h,
   `ephemeral_5m` = 5 min: API keys, usage credits, subagents). With no data, 1 h. R1, the daily review, the
-  plan-window breakdown and the hook all use it; `nudge.idle_min` in `alerts.json`, if you set it, wins.
+  plan-window breakdown and the hook all use it. `nudge.idle_min` in `alerts.json`, if you set it, replaces it for
+  the resume warning only.
 - **Prices**: list prices from platform.claude.com/docs/en/about-claude/pricing (table date in
   `sessioncoach/pricing.py`). A model not in the table is priced like the newest model of its family and listed as
   *without exact price* (requests and USD affected) in `sessioncoach verify`, `sessioncoach report` and the
@@ -49,7 +50,8 @@ under-count output tokens.
 modification time); a file that grew is read again from its start. The result is the same as reading everything.
 `sessioncoach ingest --full` reads every transcript again (use it if you edited the database by hand, or if a
 transcript was restored with an older modification time). Claude Code's transcript format is internal and
-undocumented; `sessioncoach verify` shows how much of it sessioncoach could read.
+undocumented: if a Claude Code update changes it, figures may drop or look odd, and `sessioncoach verify` (backtest
+and conservation check) is the first place to look.
 
 ## Demo and anonymous mode
 
@@ -57,7 +59,7 @@ undocumented; `sessioncoach verify` shows how much of it sessioncoach could read
 (companies acme, globex and initech; long sessions, resumes after the cache expired on 1 h and 5 min caches,
 subagents on Opus, sessions that mix projects, plan limits, budgets, several accounts) under `<data dir>/demo/`, runs
 them through the real pipeline and opens the dashboard on them with a "Demo data" banner. Your own data, `~/.claude`
-and the schedulers are not touched. Same seed and day, same data.
+and the schedulers are not touched. The same seed gives the same sessions, placed relative to the current time.
 
 For screenshots of your own data, add `&anon=1` to the dashboard link or press **Anonymous**: projects, workspaces,
 accounts and budgets become "Project A", "Workspace 1", "Account 1"… (ordered by spend, consistent across views) and

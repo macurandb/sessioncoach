@@ -1,7 +1,7 @@
 # Projects, companies and Claude accounts
 
 Everything here is optional. Without it, sessioncoach groups cost by Claude Code project dir and shows each login
-it finds with an automatic label such as "Max · 20x".
+it finds with an automatic label built from its plan and tier.
 
 ## Projects and companies (`projects.json`)
 
@@ -22,8 +22,8 @@ daily review flags sessions that mixed companies.
 ## Several Claude accounts
 
 Claude Code keeps one login per config dir: `~/.claude` by default, or the dir in `CLAUDE_CONFIG_DIR`. Each config dir
-has its own login, settings and transcripts. sessioncoach reads, from each config dir's `.claude.json`, a hash of the
-organization id and the plan type, never the email or names, and splits cost by account. A config dir that switches
+has its own login, settings and transcripts. sessioncoach reads, from each config dir's `.claude.json` (for the default
+`~/.claude`, `~/.claude.json` first), a hash of the organization id and the plan type, never the email or names, and splits cost by account. A config dir that switches
 login (`/login`) is split at the switch, as seen by the next ingest.
 
 To name accounts and tie each one to a company, create `~/.sessioncoach/accounts.json`:

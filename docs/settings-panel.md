@@ -31,4 +31,4 @@ projects with their own hook and offers to remove it from them (a checkbox in th
 `<file>.bak-kit-<timestamp>` backup, atomically, and answers 409 if the file changed in between.
 Protections: the session cookie from the printed link (see Privacy and security), per-start token (`X-Kit-Token`,
 only embedded in the page served with that cookie), loopback `Host`/`Origin` checks, JSON-only bodies with a size limit, strict validation, and no
-client-supplied paths. The panel is hidden in anonymous mode. `POST /api/refresh` also needs the token now.
+client-chosen paths (the paths in an apply request must match the server's own plan). The panel is hidden in anonymous mode. `POST /api/refresh` also needs the token now.

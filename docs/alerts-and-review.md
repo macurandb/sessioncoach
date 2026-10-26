@@ -37,14 +37,15 @@ running and opened once from its printed link in that browser (see
 ## The resume warning
 
 `sessioncoach hook-install` (or `setup`) adds a `UserPromptSubmit` hook. Before a prompt makes Claude Code write a
-big expired cache again, it tells you what that would cost and what to type instead. It is shown to you, never to the
+big expired cache again, it tells you how long you were away, how much context it will re-read and what to type
+instead. It is shown to you, never to the
 model. Its thresholds are `nudge.idle_min` (the cache lifetime the transcript recorded, unless you set it) and
 `nudge.min_context_tokens` (100k) in `alerts.json`. To hold the prompt back instead of only warning, see
 [the idle guard](handoff-and-idle-guard.md#the-idle-guard-opt-in).
 
 ## Daily review
 
-`sessioncoach review` looks at your **last active day** (on a Monday, the Friday) and tells you what was expensive,
+`sessioncoach review` looks at your **last active day** (on a Monday, the Friday if you did not work at the weekend) and tells you what was expensive,
 session by session: resumes after the cache expired, turns with a very long context, subagents on Opus, and sessions
 that worked on more than one project or company. It picks **one** change for today (the biggest savings ceiling, an
 estimate) and compares with the active day before. It reads only the numbers sessioncoach already stores, so it

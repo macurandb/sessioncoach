@@ -31,7 +31,8 @@ then being lost. `contrib/launchd/` keeps a manual template.
 - Claude Code runs the `hooks` and `statusLine` commands through **Git Bash** when it is installed, otherwise **PowerShell**
   ([hooks](https://code.claude.com/docs/en/hooks), [status line → Windows configuration](https://code.claude.com/docs/en/statusline)).
   sessioncoach writes commands that work in both: the Python path with forward slashes and no quotes (8.3 short form if the path
-  has spaces). The status line you had before is kept and run with the same shell.
+  has spaces). If that drive has 8.3 names turned off, the path is quoted, which Git Bash runs and PowerShell does
+  not: then install Python in a path without spaces. The status line you had before is kept and run with the same shell.
 - `sessioncoach check` cannot test POSIX permissions there; it checks that the data directory is inside your user profile.
 - Scheduled runs use `pythonw.exe` (no console window).
 
