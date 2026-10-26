@@ -796,7 +796,7 @@ def uninstall_all(cwd=None, agents_dir=None, load=True, purge=False, confirm=Non
     if isinstance(nd, dict) and "block" in nd:
         update_alerts(lambda c: c["nudge"].pop("block", None))
         out.append("idle guard: off")
-    for mod in (idleguard, idlecompact, keepctx):
+    for mod in (idleguard, idlecompact, keepctx, resume):
         if mod.remove():
             out.append("removed %s" % mod.path())
     out += _remove_cut_rules(os.path.abspath(cwd or os.getcwd()))

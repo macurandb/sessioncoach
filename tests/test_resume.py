@@ -163,11 +163,37 @@ class Hook(Base):
             resume.hook_main()
         self.assertEqual(out.getvalue(), "")
 
-    def test_it_writes_nothing(self):
-        write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state")
+    def test_it_writes_only_its_note_of_the_handoffs_given(self):
+        # was "writes nothing": since the apps' /clear gets a fresh handoff once, the hook notes which ones it gave
+        p = write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "TEXT OF THE HANDOFF")
         before = sorted(os.path.join(d, f) for d, _, fs in os.walk(self.home) for f in fs)
         self.run_hook({"source": "clear", "cwd": self.repo})
-        self.assertEqual(sorted(os.path.join(d, f) for d, _, fs in os.walk(self.home) for f in fs), before)
+        after = sorted(os.path.join(d, f) for d, _, fs in os.walk(self.home) for f in fs)
+        self.assertEqual(sorted(set(after) - set(before)), sorted([resume.path(), resume.LOADED.lock_path()]))
+        self.assertEqual([(e["path"], e["mtime"]) for e in resume.LOADED.load()], [(p, os.path.getmtime(p))])
+        with open(resume.path(), encoding="utf-8") as fh:
+            self.assertNotIn("TEXT OF THE HANDOFF", fh.read())  # never the handoff's text
+
+    def test_the_apps_clear_gets_a_fresh_handoff_once(self):
+        # VS Code and the desktop app send "startup" on /clear: /handoff then /clear must still give the handoff
+        p = write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=60)
+        startup = {"source": "startup", "cwd": self.sub, "session_id": "s"}
+        self.assertIn(p, json.loads(self.run_hook(startup))["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.run_hook(startup), "")  # a second window does not get it again
+        self.assertIn(p, self.run_hook({"source": "clear", "cwd": self.repo}))  # the CLI's /clear always does
+        write(p, "state 2", age_s=30)  # rewritten by a new /handoff: a new version
+        self.assertIn("state 2", self.run_hook(startup))
+        self.assertEqual(self.run_hook(startup), "")
+
+    def test_a_new_window_gets_no_handoff_older_than_fresh_s(self):
+        write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=resume.FRESH_S + 60)
+        self.assertEqual(self.run_hook({"source": "startup", "cwd": self.repo}), "")
+        self.assertEqual(resume.LOADED.load(), [])  # nothing given, nothing noted
+
+    def test_a_handoff_given_on_clear_is_not_given_again_to_a_new_window(self):
+        write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state", age_s=60)
+        self.assertNotEqual(self.run_hook({"source": "clear", "cwd": self.repo}), "")
+        self.assertEqual(self.run_hook({"source": "startup", "cwd": self.repo}), "")
 
 
 class Install(Base):
@@ -243,9 +269,21 @@ class Install(Base):
         resume.install(self.settings, kit_bin="/nonexistent/bin/sessioncoach")
         items = {n: (s, d) for s, n, d in installer.check(cwd=self.repo)}
         self.assertEqual(items["resume hook [global]"][0], installer.BAD)
+        resume.give(write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state"), False)
         out = installer.uninstall_all(cwd=self.repo, load=False)
         self.assertIn("resume hook [global]: removed", out)
+        self.assertIn("removed %s" % resume.path(), out)
         self.assertFalse(resume.installed(self.settings))
+        self.assertFalse(os.path.exists(resume.path()))
+
+    def test_resume_hook_uninstall_removes_its_note(self):
+        resume.install(self.settings, kit_bin="/k/bin/sessioncoach")
+        resume.give(write(os.path.join(self.repo, "docs", "HANDOFF-x.md"), "state"), False)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["resume-hook-uninstall"])
+        self.assertIn("removed %s" % resume.path(), out.getvalue())
+        self.assertFalse(os.path.exists(resume.path()))
 
     def test_setup_skips_it_in_a_project_when_the_global_settings_have_it(self):
         resume.install(self.settings, kit_bin="/k/bin/sessioncoach")

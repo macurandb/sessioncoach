@@ -278,6 +278,8 @@ def cmd_resume_hook_install(args):
 def cmd_resume_hook_uninstall(args):
     from . import installer, resume
     print(resume.uninstall())
+    if resume.remove():
+        print("removed %s" % resume.path())
     installer.refresh_handoff()
 
 

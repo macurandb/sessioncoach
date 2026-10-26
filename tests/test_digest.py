@@ -232,10 +232,11 @@ class AfterClear(unittest.TestCase):
         self.assertIn("Previous transcript: %s." % self.old, self.run_hook())
         self.assertEqual(idleguard.load(), [])
 
-    def test_the_apps_clear_is_a_startup_and_gets_the_digest_only_when_a_prompt_is_held(self):
+    def test_the_apps_clear_is_a_startup_and_gets_the_digest_when_a_prompt_is_held(self):
         # the VS Code extension and the desktop app start a new session on /clear: source "startup", not "clear"
+        self.handoff_file(age_s=resume.FRESH_S + 60)
+        self.assertIsNone(self.run_hook(source="startup"))  # a plain new window gets no old handoff
         self.handoff_file(age_s=60)
-        self.assertIsNone(self.run_hook(source="startup"))  # a plain new window gets no handoff, not even a fresh file
         self.hold(age_s=120)
         ctx = self.run_hook(source="startup")
         self.assertIn("WRITTEN BY CLAUDE", ctx)  # written after the hold: it wins, as on the CLI's /clear
