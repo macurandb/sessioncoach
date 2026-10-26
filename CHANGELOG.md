@@ -5,8 +5,8 @@
 First public release.
 
 ### Measurement
-- `sessioncoach ingest` reads Claude Code's local transcripts into a private SQLite file (numbers and ids only: tokens,
-  models, timestamps), keeps the history after Claude Code deletes old transcripts, and skips files that did not change.
+- `sessioncoach ingest` reads Claude Code's local transcripts into a private SQLite file (metadata only: token counts,
+  models, times, ids, project and tool names; never session content), keeps the history after Claude Code deletes old transcripts, and skips files that did not change.
 - Cost per day, week, project, company (tenant) and Claude account, split into *recorded* (Claude Code's own
   `cost-state`) and *estimated* (list price), with a backtest and a conservation check (`sessioncoach verify`).
 - A config dir that switches accounts (`/login`) splits its cost at the switch, as seen by the next ingest.
@@ -21,13 +21,14 @@ First public release.
 ### Acting before the money is spent
 - Resume warning (`hook-install`, a `UserPromptSubmit` hook): before a prompt re-reads a big context whose cache
   expired, says what it would cost and what to type instead.
-- Idle guard (opt-in, `idle-guard-on`): the first prompt after a pause longer than the cache is held back, so nothing is
+- Idle guard (opt-in, `idle-guard-on`): the first prompt after a pause of an hour or more is held back, so nothing is
   spent until you choose: send it again, `/clear` for a free automatic handoff built from the previous transcript, or
   `/handoff`.
 - Handoffs: `/handoff [topic]` (`handoff-install`) has Claude write `docs/HANDOFF-<date>-<topic>.md`; the resume hook
   (`resume-hook-install`, `SessionStart`) gives the session after `/clear` the newest handoff of its project from the
-  last 24 h (never one tracked by git). It works with the CLI's `/clear` and with the VS Code extension's and the
-  desktop app's, which start a new session.
+  last 24 h (never one tracked by git). In the VS Code extension and the desktop app, whose `/clear` starts a new
+  session, it gives a handoff written in the last 30 min that no session got yet, so an old one never reaches a new
+  window.
 - `/keep-context [off]` keeps one session's whole context through Claude Code's idle summary; `sessioncoach
   idle-compact` tells, from your own returns, whether `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` pays off.
 - Plan limits and alerts in the status line (`statusline-install`, chained after your own status line), notifications

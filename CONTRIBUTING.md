@@ -36,8 +36,8 @@ python3 -m pytest                       # or `uvx pytest`, if pytest is availabl
 4. **Backward compatibility**: whatever an earlier version installed (hooks, status line, scheduled jobs,
    markers, data dir, environment variables) keeps working and is recognised. Pre-existing tests are not
    changed to make a change pass, unless the commit says why.
-5. **Privacy**: only numbers and ids are stored; transcript text never reaches the database. Run
-   `scripts/leakcheck.py` before every push (maintainers keep the private list outside the repo).
+5. **Privacy**: only metadata is stored (see `docs/privacy-and-security.md`); transcript text never reaches the
+   database. Run `scripts/leakcheck.py` before every push (maintainers keep the private list outside the repo).
 6. One cohesive change per commit.
 
 ## Known design debt

@@ -20,5 +20,6 @@ Only the latest release gets fixes while the project is in 0.x.
 ## Scope
 
 In scope: anything that lets another local user, a web page or a crafted transcript read your data, change your
-Claude Code settings, run commands or reach the dashboard's write API. The privacy promises in the README (only
-numbers and ids are stored; nothing is sent anywhere unless you turn on the daily-review email) are in scope too.
+Claude Code settings, run commands or reach the dashboard's write API. The privacy promises (session content is never
+stored, and sessioncoach sends nothing anywhere unless you turn on the daily-review email; see
+`docs/privacy-and-security.md`) are in scope too.

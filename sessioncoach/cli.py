@@ -448,7 +448,7 @@ VALUE = {
     "day": "Catch an expensive day early: today against yesterday, per account and project.",
     "tools": "Find out whether exploration or one MCP server is eating your turns.",
     "verify": "How far to trust the cost figures before you act on them.",
-    "statusline": "See a plan limit coming before it stops you: limits and alerts in the status line.",
+    "statusline": "The command Claude Code runs to draw the status line (statusline-install sets it up).",
     "statusline-install": "See a plan limit coming before it stops you: limits and alerts in the status line.",
     "statusline-uninstall": "Give the status line back to your own command alone.",
     "hook": "The entry point Claude Code runs for sessioncoach's hooks: the resume warning (prompt), the handoff after "
@@ -484,7 +484,7 @@ VALUE = {
 # The technical side, after the options: which files a command writes, where, and how to undo it.
 DETAIL = {
     "ingest": "Reads ~/.claude/projects (or CLAUDE_CONFIG_DIR, SESSIONCOACH_PROJECTS_DIRS) into <data dir>/metrics.db. "
-              "Only numbers and ids are kept. Each run also checks budgets, the cache-expiry warning and a missed review.",
+              "Only metadata is kept (counts, models, times, ids, names), never session content. Each run also checks budgets, the cache-expiry warning and a missed review.",
     "statusline-install": "Edits the statusLine of ~/.claude/settings.json (backup .bak-statusline); your previous command keeps "
                           "running first, from a chain file in the data dir. Undo: sessioncoach statusline-uninstall.",
     "hook-install": "Adds a UserPromptSubmit hook to ~/.claude/settings.json (backup .bak-hook). It is shown to you, never to the "
