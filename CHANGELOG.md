@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - 2026-10-26
 
 - `sessioncoach demo`: the live session's cost snapshots came after the next burst's first request, so a third of
   the hours of a day its "Data quality" said CHECK instead of PASS (and a test of `verify` failed in CI).

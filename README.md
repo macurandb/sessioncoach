@@ -26,7 +26,7 @@ expected saving (always labelled as an estimate) and how to check afterwards tha
 > subscription you do not pay that: read them as how much of your plan's limits a habit burns, and compare them with
 > each other, not with your invoice.
 
-Status: early preview (0.1.0); interfaces may change. sessioncoach reads Claude Code's local transcripts, an internal
+Status: early preview (0.1.1); interfaces may change. sessioncoach reads Claude Code's local transcripts, an internal
 format that Claude Code does not document and may change; `sessioncoach verify` checks the figures (a backtest
 against Claude Code's own cost counter, a conservation check, and models with no exact price).
 Works on macOS and Linux (and WSL). Windows support is experimental: covered by tests and CI, not yet used day to day
