@@ -154,6 +154,7 @@ class Reports(CliBase):
         self.assertIn("sessioncoach report", out)
         self.assertIn("where it goes", out)
         self.assertIn("recommendations", out)
+        self.assertNotIn('{"', out)  # words, not params
         rc, out = self.run_cli("report", "--days", "7", "--tenant", "acme", "--project", "acme")
         self.assertIn("--tenant acme --project acme", out)
 

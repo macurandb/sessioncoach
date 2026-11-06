@@ -16,6 +16,30 @@ def req(kind="main", model="claude-opus-5-5", inp=0, out=0, cr=0, cw=0, ts="2026
             "cache_write_1h": None, "cache_write_5m": None, "project_dir": "-p", "file": f, "session_id": "s"}
 
 
+class Describe(unittest.TestCase):
+    def line(self, rid, params, **rec):
+        return rules.describe(dict(rec, id=rid, params=params))
+
+    def test_every_rule_reads_as_a_sentence(self):
+        self.assertEqual(self.line("R1", {"resumes": 176, "tokens": 60338260, "usd": 487.76, "ttl": "1 h"}),
+                         "176 resumes after the cache expired (TTL of 1 h) wrote 60,338,260 tokens to the cache again")
+        self.assertEqual(self.line("R2", {"share": 0.5, "usd": 10.5}), "50% of the cost ($10.50) goes to 1M-context variants")
+        self.assertIn("38 general-purpose subagents", self.line("R3", {"agents": 38, "tokens": 5, "subagent_opus_usd": 56.38}))
+        self.assertIn("comes from subagents", self.line("R4", {"share": 0.3, "usd": 1.0}))
+        self.assertEqual(self.line("R16", {"share": 0.622, "usd": 1405.88, "median_k": 242, "threshold_k": 300}),
+                         "62% of the main-thread cost ($1405.88) comes from turns over 300k tokens of context (median per turn: 242k)")
+
+    def test_a_transition_says_whether_it_ended(self):
+        p = {"tenant": "acme", "account": "Personal", "company": "personal", "usd": 741.5, "until": "2026-10-31", "expired": True}
+        self.assertEqual(self.line("R14", p), "$741.50 of acme work on the Personal account, tied to personal "
+                                              "(the transition ended on 2026-10-31)")
+        self.assertIn("(in transition until 2026-10-31)", self.line("R14", dict(p, expired=False), acknowledged=True))
+        self.assertNotIn("transition", self.line("R14", dict(p, expired=False, until=None)))
+
+    def test_a_rule_without_wording_keeps_its_numbers(self):
+        self.assertEqual(self.line("R99", {"a": 1}), '{"a": 1}')
+
+
 class TestPricingHelpers(unittest.TestCase):
     def test_context_tokens_adds_input_and_both_cache_sides(self):
         self.assertEqual(pricing.context_tokens(req(inp=1, cr=20, cw=300, out=4000)), 321)

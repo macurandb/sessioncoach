@@ -5,7 +5,7 @@ import json
 import os
 import sys
 
-from . import __version__, analysis, collect, cost, paths, store
+from . import __version__, analysis, collect, cost, paths, rules, store
 
 
 def _fmt(n):
@@ -81,7 +81,7 @@ def cmd_report(args):
         print("\n  recommendations (savings are estimates):")
         for r in d["recommendations"]:
             saving = "≈ %.2f $" % r["saving_usd"] if r["saving_usd"] else "-"
-            print("    %s  saving %-12s confidence %-6s %s" % (r["id"], saving, r["confidence"], json.dumps(r["params"])))
+            print("    %s  saving %-12s confidence %-6s %s" % (r["id"], saving, r["confidence"], rules.describe(r)))
     print("\n  reproduce: sessioncoach report --days %s%s%s" % (args.days or 0, " --tenant " + args.tenant if args.tenant else "",
                                                     " --project " + args.project if args.project else ""))
 

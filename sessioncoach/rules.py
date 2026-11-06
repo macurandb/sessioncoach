@@ -13,6 +13,7 @@ Only `pricing` and the leaf `config` are imported: analysis imports this module,
 (analysis.ResumeDetector) reaches the rules already done, in `Window.resumes`.
 """
 import collections
+import json
 
 from . import config, pricing
 
@@ -147,6 +148,34 @@ def r16_long_context(w, threshold=None):
     return {"id": "R16", "saving_usd": None, "confidence": "high", "effort": "habit",
             "params": {"share": round(w_big / w_main, 3), "usd": round(w_big, 2), "median_k": int(ctxs[len(ctxs) // 2] / 1000),
                        "threshold_k": int(threshold / 1000)}, "verify_metric": "context_per_turn"}
+
+
+DESCRIPTIONS = {
+    "R1": "%(resumes)d resumes after the cache expired (TTL of %(ttl)s) wrote %(tokens)s tokens to the cache again",
+    "R2": "%(share).0f%% of the cost ($%(usd).2f) goes to 1M-context variants",
+    "R3": "%(agents)d general-purpose subagents on Opus (%(tokens)s tokens, $%(subagent_opus_usd).2f at list price)",
+    "R4": "%(share).0f%% of the list-price cost ($%(usd).2f) comes from subagents",
+    "R14": "$%(usd).2f of %(tenant)s work on the %(account)s account, tied to %(company)s",
+    "R16": "%(share).0f%% of the main-thread cost ($%(usd).2f) comes from turns over %(threshold_k)dk tokens of context "
+           "(median per turn: %(median_k)dk)",
+}
+
+
+def describe(rec):
+    """One line for the terminal from a recommendation's params; the dashboard words its own, in two languages."""
+    p = dict(rec["params"])
+    if "share" in p:
+        p["share"] *= 100
+    if "tokens" in p:
+        p["tokens"] = format(p["tokens"], ",")
+    if rec["id"] not in DESCRIPTIONS:
+        return json.dumps(rec["params"])
+    text = DESCRIPTIONS[rec["id"]] % p
+    if p.get("expired"):
+        text += " (the transition ended on %s)" % p["until"]
+    elif rec.get("acknowledged"):
+        text += " (in transition until %s)" % p["until"]
+    return text
 
 
 # in the order they are listed when their savings and confidence tie
