@@ -143,6 +143,13 @@ class Reports(CliBase):
         for name, value in cli.VALUE.items():
             self.assertTrue("| `%s` | %s |" % (name, value) in readme, "README: regenerate the commands table (%s)" % name)
 
+    def test_ingest_says_when_it_ran(self):
+        rc, out = self.run_cli("ingest")
+        self.assertEqual(rc, 0)
+        data = json.loads(out)
+        self.assertRegex(data["at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$")
+        self.assertIn("added", data)  # what was already there stays
+
     def test_help_on_an_unknown_command(self):
         rc, out = self.run_cli("help", "nope")
         self.assertEqual(rc, 2)
