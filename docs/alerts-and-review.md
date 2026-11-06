@@ -5,9 +5,11 @@
 On Pro and Max plans Claude Code passes the 5-hour window and weekly cap usage to the status line.
 `sessioncoach statusline-install` chains sessioncoach **after** your current status line (it is kept verbatim and
 still runs first; `statusline-uninstall` restores it). All of this runs when Claude Code draws the status line, so
-sessions that do not draw it leave no samples and fire none of these alerts. On the machine this was measured on,
-terminal sessions left samples and VS Code extension and desktop app sessions none; `sessioncoach check` warns when
-samples stop while sessions go on. You then get:
+sessions that do not draw it leave no samples and fire no limit, pace or context-percentage alert: Claude Code gives
+those numbers nowhere else. On the machine this was measured on, terminal sessions left samples and VS Code extension
+and desktop app sessions none; `sessioncoach check` warns when samples stop while sessions go on. The alert on context
+size in tokens (`context_tokens`) does reach those sessions, from the prompt hook, at the next prompt instead of
+during the turn, and a session gets it once whichever fires first. You then get:
 
 - `5h 42% ↻18:37 · 7d 61% ↻Sat 03:57 · ctx 12%` in the status line, yellow at 75 %, red at 90 %;
 - a desktop notification (macOS, Linux, Windows) when a threshold is crossed, once per window, or when the current
@@ -45,6 +47,10 @@ instead. It is shown to you, never to the
 model. Its thresholds are `nudge.idle_min` (the cache lifetime the transcript recorded, unless you set it) and
 `nudge.min_context_tokens` (100k) in `alerts.json`. To hold the prompt back instead of only warning, see
 [the idle guard](handoff-and-idle-guard.md#the-idle-guard-opt-in).
+
+The same hook sends the desktop notification for `context_tokens` (300k and 500k by default) when a session passes one,
+even without the status line, and records it in `logs/alerts.log` and the Warnings card. Set `context_tokens` to `[]`
+to turn it off.
 
 ## Daily review
 

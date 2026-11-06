@@ -119,7 +119,7 @@ undo it.
 | `statusline-install` | See a plan limit coming before it stops you: limits and alerts in the status line. |
 | `statusline-uninstall` | Give the status line back to your own command alone. |
 | `hook` | The entry point Claude Code runs for sessioncoach's hooks: the resume warning (prompt), the handoff after /clear (session-start), Claude Code's idle summary (pre-compact) and /keep-context (keep-context). |
-| `hook-install` | Decide before a prompt re-reads a big context whose cache expired, not after paying for it. |
+| `hook-install` | Decide before a prompt re-reads a big context whose cache expired, and hear when a session's context gets expensive. |
 | `hook-uninstall` | Stop the resume warning. |
 | `alerts` | How close you are to the 5-hour and weekly limits and to your budgets. |
 | `alert-log` | Whether the warnings help: what each said, why, and what you did next. |

@@ -601,8 +601,8 @@ def _limits_items(now):
     last, sessions = gap
     if last is None:  # never sampled: an API key looks the same, so it stays a note
         return [(OK, "plan limits", "no sample yet: they come from sessions that draw the status line, on Pro and Max plans")]
-    return [(WARN, "plan limits", "last sample %s, %d session%s since it: the status line alerts did not see them "
-             "(limits, context). Probably sessions outside the terminal (VS Code, desktop app): see docs/alerts-and-review.md"
+    return [(WARN, "plan limits", "last sample %s, %d session%s since it: the plan limit alerts did not see them. "
+             "Probably sessions outside the terminal (VS Code, desktop app): see docs/alerts-and-review.md"
              % (time.strftime("%Y-%m-%d", time.localtime(last)), sessions, "" if sessions == 1 else "s"))]
 
 

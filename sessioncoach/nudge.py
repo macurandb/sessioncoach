@@ -8,7 +8,8 @@ blocking the prompt. From the transcript it reads only timestamps and token coun
 looks at the words of the prompt just typed to answer in the same language (es/en), in memory; then Claude Code's
 `language` setting decides. When it warns, it then keeps the warning's numbers (pause, context size, TTL, session and
 project dir ids) for the dashboard's warnings view; the prompt's text is never stored. It never fails the prompt:
-any error prints nothing.
+any error prints nothing. The same transcript gives the context size, so it also fires alerts.json → context_tokens,
+which the status line only fires in sessions that draw it.
 
 Idle guard (opt-in: alerts.json → nudge.block, `sessioncoach idle-guard-on`): instead of the warning it prints
 `{"decision": "block"}`, so that first prompt is not sent and costs nothing, and records the pause in idleguard.py
@@ -24,6 +25,7 @@ import functools
 import json
 import os
 import sys
+import time
 
 from . import config, handoff, hooks, idleguard, paths, resume
 
@@ -35,7 +37,9 @@ DEFAULTS = config.NUDGE_DEFAULTS
 DEFAULT_TTL_S = 3600  # when the transcript does not say which TTL it used
 # what the hook gives the user, said by `sessioncoach setup` before asking (the technical side: `sessioncoach help hook-install`)
 VALUE = ("Coming back to a big session after its cache expired writes the whole context again, at the price of a cache write. "
-         "The warning shows before that prompt is answered, while you can still choose /compact or a fresh session.")
+         "The warning shows before that prompt is answered, while you can still choose /compact or a fresh session. "
+         "It also sends a desktop notification when a session passes alerts.json → context_tokens (300k and 500k by default), "
+         "written to alerts.log and the warnings view; [] turns that off.")
 VALUE_FIGURE = "In the last 7 days that happened %(resumes)d times, ≈ $%(resume_usd).2f (API-equivalent at list price)."
 
 # The steps are literal so they can be copied as they are; {date} names today's handoff file.
@@ -156,14 +160,15 @@ def check(data, cfg=None, now=None):
     """
     return evaluate(data, cfg, now)[0]
 
-def evaluate(data, cfg=None, now=None):
-    """-> (message or None, numbers behind it or None): what check() decides and why."""
+def evaluate(data, cfg=None, now=None, turn=None):
+    """-> (message or None, numbers behind it or None): what check() decides and why.
+    `turn`: what last_turn_info() already read, so the prompt's path reads the transcript once."""
     user = dict(cfg or {})
     cfg = dict(DEFAULTS, **user)
     path = data.get("transcript_path")
     if not path or not os.path.exists(path):
         return None, None
-    ts, ctx, ttl = last_turn_info(path)
+    ts, ctx, ttl = turn or last_turn_info(path)
     if not ts:
         return None, None
     t = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -239,7 +244,10 @@ def hook_main():
         alerts = load_alerts()
         cfg = dict(alerts.get("nudge") or {}, lang=alerts.get("lang"))
         data = json.loads(sys.stdin.read() or "{}")
-        text, info = evaluate(data, cfg)
+        path = data.get("transcript_path")
+        turn = last_turn_info(path) if path and os.path.exists(path) else None
+        text, info = evaluate(data, cfg, turn=turn)
+        held = False
         if text and info.get("idle_summary"):  # not a warning: shown, never held back or kept
             print(json.dumps({"systemMessage": text}, ensure_ascii=False))
             sys.stdout.flush()
@@ -249,8 +257,31 @@ def hook_main():
                 print(json.dumps(out[0], ensure_ascii=False))
                 sys.stdout.flush()
                 _log(data, out[1])
+                held = out[0].get("decision") == "block"
+        if turn and not held:
+            _context_alert(data, turn[1], alerts)
     except Exception:  # never get in the way of a prompt
         pass
+
+
+def _context_alert(data, ctx, alerts):
+    """The context-size alert for sessions that do not draw the status line (VS Code, desktop app): this hook runs in
+    them too. A desktop notification, as from the status line, which also keeps the prompt's output to one object.
+    Below the lowest threshold the database is not opened; past it, same rules as _log()."""
+    import sqlite3
+
+    from . import limits
+    tokens = alerts.get("context_tokens") or []
+    db = paths.db_path()
+    if not (tokens and ctx >= min(tokens) and alerts.get("notify", True) and data.get("session_id") and os.path.exists(db)):
+        return
+    con = sqlite3.connect(db, timeout=1)
+    try:
+        pdir = os.path.basename(os.path.dirname(data.get("transcript_path") or ""))
+        limits.alert_context_tokens(con, ctx, data["session_id"], int(time.time()), alerts, project_dir=pdir or None)
+        con.commit()
+    finally:
+        con.close()
 
 
 def _log(data, info):

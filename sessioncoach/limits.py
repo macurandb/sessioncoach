@@ -184,15 +184,21 @@ def record_and_alert(con, data, now=None, cfg=None, root=None):
                 store.add_alert_event(con, "context", {"pct": ctx, "threshold": th}, session_id=sid, ts=now)
                 notify(msg("ctx_t", p=round(ctx)), msg("ctx_m"))
     if ctx_tokens:
-        # every turn re-reads the whole context: past a few hundred k tokens each turn gets expensive
-        for th in sorted(cfg.get("context_tokens") or [], reverse=True):
-            if ctx_tokens >= th:
-                if sid and not already_sent(con, "ctxtok:%s:%s" % (sid, th)) and cfg.get("notify", True):
-                    store.add_alert_event(con, "context_tokens", {"context": ctx_tokens, "threshold": th}, session_id=sid, ts=now)
-                    notify(msg("ctxtok_t", k=int(ctx_tokens / 1000)), msg("ctxtok_m"))
-                break
+        alert_context_tokens(con, ctx_tokens, sid, now, cfg)
     con.commit()
     return out
+
+
+def alert_context_tokens(con, ctx_tokens, sid, now, cfg, project_dir=None):
+    """Every turn re-reads the whole context: past a few hundred k tokens each turn gets expensive.
+    One alert per session and threshold, whoever sees it first: the status line or the prompt hook (nudge.py)."""
+    for th in sorted(cfg.get("context_tokens") or [], reverse=True):
+        if ctx_tokens >= th:
+            if sid and not already_sent(con, "ctxtok:%s:%s" % (sid, th)) and cfg.get("notify", True):
+                store.add_alert_event(con, "context_tokens", {"context": ctx_tokens, "threshold": th}, session_id=sid,
+                                      project_dir=project_dir, ts=now)
+                notify(msg("ctxtok_t", k=int(ctx_tokens / 1000)), msg("ctxtok_m"))
+            break
 
 
 def sample_gap(con, now):

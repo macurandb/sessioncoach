@@ -295,6 +295,62 @@ class Recording(unittest.TestCase):
         self.assertEqual((src, sid, pd, data["context"], data["last_ts"]), ("hook", "s1", PDIR, 250000, "2026-10-01T10:00:00Z"))
         self.assertNotIn("sigue", json.dumps(data))
 
+    def context_prompt(self, tokens=350000, session="s1", ts=None, **alerts):
+        """A prompt right after a turn of `tokens`, through the hook; -> the titles it notified."""
+        pdir = os.path.join(self.tmp, "projects", PDIR)
+        os.makedirs(pdir, exist_ok=True)
+        path = os.path.join(pdir, session + ".jsonl")
+        when = ts or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(path, "w") as fh:
+            fh.write(json.dumps({"type": "assistant", "timestamp": when, "message": {
+                "id": "m1", "model": "claude-opus-5-5", "usage": {"input_tokens": 0, "cache_read_input_tokens": tokens}}}) + "\n")
+        with open(os.path.join(self.tmp, "alerts.json"), "w") as fh:
+            json.dump(dict({"context_tokens": [300000, 500000]}, **alerts), fh)
+        payload = json.dumps({"session_id": session, "transcript_path": path, "prompt": "sigue"})
+        with mock.patch.object(sys, "stdin", io.StringIO(payload)), redirect_stdout(io.StringIO()) as out, \
+                mock.patch.object(limits, "notify") as note:
+            nudge.hook_main()
+        self.hook_output = out.getvalue()
+        return [c[0][0] for c in note.call_args_list]
+
+    def test_prompt_hook_alerts_on_context_size_once_per_threshold(self):
+        self.assertEqual(len(self.context_prompt()), 1)
+        self.assertEqual(self.hook_output, "")
+        (src, sid, pd, data), = self.events()
+        self.assertEqual((src, sid, pd, data["context"], data["threshold"]), ("context_tokens", "s1", PDIR, 350000, 300000))
+        self.assertEqual(self.context_prompt(tokens=360000), [])
+        self.assertEqual(len(self.context_prompt(tokens=600000)), 1)  # the next threshold
+        self.assertEqual(len(self.context_prompt(session="s2")), 1)  # another session
+        self.assertEqual(len(self.events()), 3)
+
+    def test_status_line_and_prompt_hook_alert_once_between_them(self):
+        con = store.connect(os.path.join(self.tmp, "metrics.db"))
+        with mock.patch.object(limits, "notify") as note:
+            limits.record_and_alert(con, {"session_id": "s1", "context_window": {"current_usage": {"cache_read_input_tokens": 350000}}},
+                                    cfg={"context_tokens": [300000, 500000]})
+        con.close()
+        self.assertEqual(note.call_count, 1)
+        self.assertEqual(self.context_prompt(), [])
+        self.assertEqual(len(self.events()), 1)
+
+    def test_prompt_hook_below_the_threshold_leaves_the_database_alone(self):
+        with mock.patch("sqlite3.connect") as connect:
+            self.assertEqual(self.context_prompt(tokens=299999), [])
+        connect.assert_not_called()
+
+    def test_prompt_hook_without_database_notification_or_thresholds_says_nothing(self):
+        self.assertEqual(self.context_prompt(notify=False), [])
+        self.assertEqual(self.context_prompt(context_tokens=[]), [])
+        self.assertEqual(self.events(), [])
+        os.remove(os.path.join(self.tmp, "metrics.db"))
+        self.assertEqual(self.context_prompt(), [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "metrics.db")))
+
+    def test_held_prompt_gets_no_context_alert(self):
+        self.assertEqual(self.context_prompt(ts="2026-10-01T10:00:00Z", nudge={"block": True}), [])
+        self.assertIn('"decision": "block"', self.hook_output)
+        self.assertNotIn("context_tokens", [e[0] for e in self.events()])
+
     def test_hook_without_database_or_table_keeps_nothing(self):
         info = {"context": 1, "last_ts": "x"}
         os.remove(os.path.join(self.tmp, "metrics.db"))

@@ -459,7 +459,7 @@ VALUE = {
     "statusline-uninstall": "Give the status line back to your own command alone.",
     "hook": "The entry point Claude Code runs for sessioncoach's hooks: the resume warning (prompt), the handoff after "
             "/clear (session-start), Claude Code's idle summary (pre-compact) and /keep-context (keep-context).",
-    "hook-install": "Decide before a prompt re-reads a big context whose cache expired, not after paying for it.",
+    "hook-install": "Decide before a prompt re-reads a big context whose cache expired, and hear when a session's context gets expensive.",
     "hook-uninstall": "Stop the resume warning.",
     "alerts": "How close you are to the 5-hour and weekly limits and to your budgets.",
     "alert-log": "Whether the warnings help: what each said, why, and what you did next.",
@@ -496,7 +496,9 @@ DETAIL = {
                           "running first, from a chain file in the data dir. Undo: sessioncoach statusline-uninstall.",
     "hook-install": "Adds a UserPromptSubmit hook to ~/.claude/settings.json (backup .bak-hook). It is shown to you, never to the "
                     "model, and never blocks a prompt unless you turn on the idle guard (idle-guard-on). "
-                    "Thresholds: alerts.json → nudge. Undo: sessioncoach hook-uninstall.",
+                    "Thresholds: alerts.json → nudge. It also sends the context_tokens desktop notification "
+                    "(alerts.json, [] turns it off). "
+                    "Undo: sessioncoach hook-uninstall.",
     "review-install": "Schedules `sessioncoach review --scheduled` with the OS scheduler (launchd, systemd, cron or Task Scheduler); "
                       "time and days from alerts.json → review. Undo: sessioncoach review-uninstall.",
     "ingest-install": "Schedules `sessioncoach ingest` with the OS scheduler; interval from alerts.json → ingest.interval_min. "

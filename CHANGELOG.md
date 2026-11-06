@@ -3,7 +3,10 @@
 ## Unreleased
 
 - `sessioncoach check` warns when plan-limit samples stopped while sessions go on, which is what sessions that do not
-  draw the status line (VS Code extension, desktop app) look like: its limit and context alerts do not see them.
+  draw the status line (VS Code extension, desktop app) look like: its limit alerts do not see them.
+- The context-size alert (`context_tokens`) also fires from the prompt hook, so it reaches sessions that do not draw
+  the status line, at the next prompt. One alert per session and threshold, whichever fires first. Installing only
+  the hook now brings these desktop notifications too; `"context_tokens": []` in `alerts.json` turns them off.
 - `sessioncoach tools` estimates the context each tool adds per turn (total, median, p90, and what the largest 1 % of
   turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
   output.
