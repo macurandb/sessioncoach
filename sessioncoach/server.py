@@ -5,6 +5,7 @@ Loopback is shared by every user of the machine, so nothing is served without a 
 handed out once the browser shows the per-start secret that `serve()` puts in the URL it opens and prints
 (`/?k=<secret>`), as Jupyter does. The secret stays valid while the process lives, so the printed link can be
 reopened in another tab or browser."""
+import contextlib
 import datetime as dt
 import hmac
 import html as html_mod
@@ -26,6 +27,8 @@ WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 REFRESH_LOCK = threading.Lock()
 MAX_BODY = 64 * 1024
+DRAIN_MAX = 1024 * 1024  # a rejected body is read up to here; a bigger one is left unread
+DRAIN_TIMEOUT = 1  # seconds to wait for a rejected body that never arrives
 MAX_DAYS = 3650  # the longest window an API call asks for (ten years)
 TOKEN_PLACEHOLDER = "__KIT_TOKEN__"
 LOGIN_PAGE = """<!doctype html><html lang="%s"><head><meta charset="utf-8"><title>sessioncoach</title></head>
@@ -99,11 +102,27 @@ def make_handler(db, token=None, settings=None, demo=False, key=None):
         kit_demo = demo
         kit_key = key
         kit_session = session
+        body_read = False
 
         def log_message(self, *args):  # keep the terminal quiet
             return
 
+        def _drain(self):
+            """Read a POST body nobody asked for: closing over unread bytes resets the socket on Windows, reply lost."""
+            if self.command != "POST" or self.body_read:
+                return
+            self.body_read = True
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return
+            if 0 < n <= DRAIN_MAX:
+                self.connection.settimeout(DRAIN_TIMEOUT)
+                with contextlib.suppress(OSError):
+                    self.rfile.read(n)
+
         def _send(self, code, body, ctype, headers=None):
+            self._drain()
             data = body if isinstance(body, bytes) else body.encode("utf-8")
             self.send_response(code)
             for k, v in (headers or {}).items():
@@ -196,6 +215,7 @@ def make_handler(db, token=None, settings=None, demo=False, key=None):
             if n < 0 or n > MAX_BODY:
                 self._err(413, "body too large")
                 return None
+            self.body_read = True
             try:
                 body = json.loads(self.rfile.read(n).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
