@@ -13,6 +13,7 @@
 - `sessioncoach tools` estimates the context each tool adds per turn (total, median, p90, and what the largest 1 % of
   turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
   output.
+- Sessions started inside a Claude Code scratchpad count for the project that owns it, not as a project of their own.
 
 ## 0.1.1 - 2026-10-26
 

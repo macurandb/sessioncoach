@@ -8,11 +8,20 @@ An optional private file (<data dir>/projects.json) maps dirs to a project and a
 Rules are fnmatch patterns over the dir name; the first match wins.
 """
 import fnmatch
+import re
 
 from . import paths
 from .collect import encode_dir
 
 UNASSIGNED = "unassigned"
+# what a session started inside a Claude Code scratchpad leaves: /tmp/claude-<uid>/<project dir>/<session uuid>/...
+SCRATCHPAD = re.compile(r"^-(?:private-)?tmp-claude-\d+-(-.+?)-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:-.*)?$")
+
+
+def owner_dir(project_dir):
+    """The project a scratchpad's dir belongs to; any other dir stays as it is."""
+    m = SCRATCHPAD.match(project_dir)
+    return m.group(1) if m else project_dir
 
 
 class Labeler:
@@ -36,11 +45,12 @@ class Labeler:
 
     def _resolve(self, project_dir):
         for r in self.rules:
-            if fnmatch.fnmatch(project_dir, r.get("match", "")):
+            if fnmatch.fnmatch(owner_dir(project_dir), r.get("match", "")):
                 # a rule without "project" keeps the automatic label and only sets the tenant
                 return r.get("project") or self._default(project_dir), r.get("tenant") or UNASSIGNED
         return self._default(project_dir), UNASSIGNED
 
     def _default(self, project_dir):
+        project_dir = owner_dir(project_dir)
         name = project_dir[len(self._prefix):] if project_dir.startswith(self._prefix) else project_dir.lstrip("-")
         return name.replace("-", "/") or project_dir

@@ -21,7 +21,7 @@ import isolate
 from serverauth import session_cookie
 
 from sessioncoach import accounts, analysis, collect, cost, limits, pricing, server, store
-from sessioncoach.projects import Labeler
+from sessioncoach.projects import Labeler, owner_dir
 
 SECRET = "SECRET-DO-NOT-STORE-4711"
 
@@ -75,6 +75,28 @@ class Base(unittest.TestCase):
         added = collect.ingest(con, [self.projects])
         cost.rebuild_slices(con)
         return con, added
+
+
+class TestScratchpadLabels(unittest.TestCase):
+    OWNER = "-Users-me-code-my-app"
+    UUID = "fbbb8147-db5b-4cf1-acdc-f331fd08c3f7"
+
+    def test_a_scratchpad_counts_for_the_project_that_owns_it(self):
+        labeler = Labeler([{"match": "*code-my-app", "project": "app", "tenant": "acme"}])
+        for d in ("-private-tmp-claude-501-%s-%s-scratchpad-e2e-proj" % (self.OWNER, self.UUID),
+                  "-tmp-claude-1000-%s-%s-scratchpad" % (self.OWNER, self.UUID),
+                  "-tmp-claude-1000-%s-%s" % (self.OWNER, self.UUID)):
+            self.assertEqual(labeler(d), ("app", "acme"), d)
+
+    def test_without_a_rule_it_gets_the_owners_automatic_label(self):
+        labeler = Labeler([])
+        d = "-private-tmp-claude-501-%s-%s-scratchpad-x" % (self.OWNER, self.UUID)
+        self.assertEqual(labeler(d), labeler(self.OWNER))
+        self.assertEqual(labeler._default(d), labeler._default(self.OWNER))  # review compares the two
+
+    def test_other_dirs_stay_as_they_are(self):
+        for d in (self.OWNER, "-private-tmp-work", "-tmp-claude-501-notes", "-private-tmp-claude-x-%s-%s" % (self.OWNER, self.UUID)):
+            self.assertEqual(owner_dir(d), d)
 
 
 class TestIngest(Base):
