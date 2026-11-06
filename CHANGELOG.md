@@ -3,6 +3,8 @@
 ## Unreleased
 
 - `sessioncoach --version` works, as `sessioncoach version` already did.
+- The dashboard server reads the body of a POST it rejects, so a Windows client gets the error instead of a reset
+  connection.
 - `sessioncoach check` warns when plan-limit samples stopped while sessions go on, which is what sessions that do not
   draw the status line (VS Code extension, desktop app) look like: its limit alerts do not see them.
 - `sessioncoach ingest` prints when it ran (`at`), so each line of `ingest.log` has its date.

@@ -6,6 +6,7 @@ import os
 import plistlib
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -485,6 +486,28 @@ class TestHttp(Base):
         self.assertEqual(self.call("GET", "/api/settings")[0], 200)
         self.assertEqual(os.listdir(self.kit), [])  # nothing written by any rejected request
         self.assertFalse(os.path.exists(self.gpath))
+
+    def raw_post(self, length, body=b""):
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.addCleanup(s.close)
+        s.sendall(("POST /api/refresh HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nContent-Length: %s\r\n\r\n" % (self.port, length)).encode() + body)
+        return s
+
+    def test_a_rejected_post_reads_its_body_before_replying(self):
+        s = self.raw_post(5)
+        s.settimeout(0.2)
+        with self.assertRaises(socket.timeout):
+            s.recv(1)  # no reply yet: the server is waiting for the body
+        s.settimeout(5)
+        s.sendall(b"12345")
+        self.assertIn(b"401", s.recv(64))
+
+    def test_a_rejected_post_does_not_wait_for_a_body_that_never_comes(self):
+        with mock.patch.object(server, "DRAIN_TIMEOUT", 0.05):
+            self.assertIn(b"401", self.raw_post(5).recv(64))
+
+    def test_a_rejected_post_with_a_bad_length_is_still_answered(self):
+        self.assertIn(b"401", self.raw_post("x").recv(64))
 
     def test_refresh_requires_the_token(self):
         self.assertEqual(self.call("POST", "/api/refresh", token=None)[0], 403)
