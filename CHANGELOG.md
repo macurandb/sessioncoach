@@ -4,6 +4,9 @@
 
 - `sessioncoach check` warns when plan-limit samples stopped while sessions go on, which is what sessions that do not
   draw the status line (VS Code extension, desktop app) look like: its limit and context alerts do not see them.
+- `sessioncoach tools` estimates the context each tool adds per turn (total, median, p90, and what the largest 1 % of
+  turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
+  output.
 
 ## 0.1.1 - 2026-10-26
 

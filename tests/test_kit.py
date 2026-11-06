@@ -101,6 +101,63 @@ class TestIngest(Base):
         with open(self.db, "rb") as fh:
             self.assertNotIn(SECRET.encode(), fh.read())
 
+    def turns(self, *steps):
+        """Requests m0, m1... of one transcript: each step is (context, output, tool names of that turn)."""
+        con = store.connect(self.db)
+        for i, (ctx, out, names) in enumerate(steps):
+            ts = "2026-10-01T10:%02d:00Z" % i
+            con.execute("INSERT INTO requests (project_dir, file, msg_id, request_id, session_id, kind, ts, input, output) "
+                        "VALUES ('p', 'f', ?, 'r', 's', 'main', ?, ?, ?)", ("m%d" % i, ts, ctx, out))
+            for j, name in enumerate(names):
+                con.execute("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name, msg_id) "
+                            "VALUES ('p', ?, 's', 'main', ?, ?, ?)", ("t%d-%d" % (i, j), ts, name, "m%d" % i))
+        return con
+
+    def test_tool_context_is_the_growth_minus_what_the_turn_wrote(self):
+        con = self.turns((1000, 100, ["Bash"]), (2500, 50, ["Bash"]), (2600, 10, ["mcp__x__y", "Read"]), (5000, 0, []))
+        v = analysis.tool_context_view(con, days=0)
+        self.assertEqual((v["calls"], v["measured"]), (4, 4))
+        rows = {r["tool"]: r for r in v["rows"]}
+        self.assertEqual(rows["Bash"]["turns"], 2)
+        self.assertEqual(rows["Bash"]["tokens"], 1400 + 50)
+        self.assertEqual(rows["mixed"]["tokens"], 2390)
+        self.assertEqual([r["tool"] for r in v["rows"]], ["mixed", "Bash"])
+        self.assertAlmostEqual(rows["Bash"]["top1_share"], 1400 / 1450)
+
+    def test_tool_context_leaves_out_what_no_result_explains(self):
+        jump = analysis.CONTEXT_JUMP_MAX + 1
+        con = self.turns((90000, 0, ["Bash"]), (1000, 0, ["Bash"]), (1000 + jump, 0, []), (1000 + jump, 500, ["Read"]),
+                         (1000 + jump + 100, 0, []), (9, 0, ["Grep"]))
+        v = analysis.tool_context_view(con, days=0)
+        self.assertEqual(v["rows"][0]["tool"], "Read")
+        self.assertEqual(v["rows"][0]["tokens"], 0)  # never below 0 when the turn wrote more than the context grew
+        self.assertEqual((v["calls"], v["measured"], len(v["rows"])), (4, 1, 1))
+
+    def test_tool_context_counts_a_copied_turn_once_and_keeps_transcripts_apart(self):
+        con = self.turns((1000, 0, ["Bash"]), (1500, 0, []))
+        for msg, ctx in (("m0", 1000), ("m1", 1500)):
+            con.execute("INSERT INTO requests (project_dir, file, msg_id, request_id, session_id, kind, ts, input, output) "
+                        "VALUES ('p', 'g', ?, 'r', 's', 'main', '2026-10-01T11:00:00Z', ?, 0)", (msg, ctx))
+        con.execute("INSERT INTO requests (project_dir, file, msg_id, request_id, session_id, kind, ts, input, output) "
+                    "VALUES ('z', 'h', 'm0', 'r', 's', 'main', '2026-10-01T12:00:00Z', 1, 0)")
+        v = analysis.tool_context_view(con, days=0)
+        self.assertEqual(v["rows"][0]["tokens"], 500)
+        self.assertEqual(v["rows"][0]["turns"], 1)
+
+    def test_tool_context_uses_only_main_turns_with_a_msg_id_in_the_filters(self):
+        con = self.turns((1000, 0, ["Bash"]), (1500, 0, []))
+        con.execute("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name) "
+                    "VALUES ('p', 'old', 's', 'main', '2026-10-01T10:00:00Z', 'Read')")
+        con.execute("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name) "
+                    "VALUES ('p', 'sub', 's', 'subagent', '2026-10-01T10:00:00Z', 'Read')")
+        con.execute("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name) "
+                    "VALUES ('p', 'nots', 's', 'main', NULL, 'Read')")
+        con.execute("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name) "
+                    "VALUES ('p', 'away', 's', 'main', '2026-09-01T10:00:00Z', 'Read')")
+        v = analysis.tool_context_view(con, days=3, today=dt.date(2026, 10, 2))
+        self.assertEqual((v["calls"], v["measured"]), (2, 1))  # the row without msg_id counts as not measured
+        self.assertEqual(analysis.tool_context_view(con, days=0, project="nope")["rows"], [])
+
     def test_no_content_stored(self):
         # a task-notification read from a file (tool_result) or pasted by the user is text, not a notification
         fake = ("<task-notification><task-id>%s</task-id><usage><subagent_tokens>500</subagent_tokens>"

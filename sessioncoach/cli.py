@@ -121,6 +121,12 @@ def cmd_tools(args):
     print("\n  %-10s %12s %6s %s" % ("day", "exploration", "Bash", " ".join("%14s" % c[:14] for c in cols)))
     for day, row in v["per_day"]:
         print("  %-10s %12d %6d %s" % (day, row.get("exploration", 0), row.get("Bash", 0), " ".join("%14d" % row.get(c, 0) for c in cols)))
+    c = analysis.tool_context_view(con, days=args.days or None, project=args.project)
+    print("\n  context added per turn, estimated from token counts (main sessions, %d of %d calls measured)" % (c["measured"], c["calls"]))
+    print("  %-28s %7s %10s %8s %8s %7s" % ("tool", "turns", "total", "median", "p90", "top 1%"))
+    for r in c["rows"][:12]:
+        print("  %-28s %7d %9dk %8d %8d %6.0f%%" % (r["tool"][:28], r["turns"], r["tokens"] / 1000, r["median"], r["p90"],
+                                                    r["top1_share"] * 100))
 
 
 def cmd_alerts(args):
@@ -446,7 +452,7 @@ VALUE = {
     "ingest": "Keeps your history after Claude Code deletes its transcripts (30 days by default); setup schedules it.",
     "report": "Where your money goes and what to change first, in the terminal.",
     "day": "Catch an expensive day early: today against yesterday, per account and project.",
-    "tools": "Find out whether exploration or one MCP server is eating your turns.",
+    "tools": "Find out whether exploration or one MCP server is eating your turns, and which tool fills your context.",
     "verify": "How far to trust the cost figures before you act on them.",
     "statusline": "The command Claude Code runs to draw the status line (statusline-install sets it up).",
     "statusline-install": "See a plan limit coming before it stops you: limits and alerts in the status line.",

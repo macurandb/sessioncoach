@@ -188,6 +188,7 @@ class Reports(CliBase):
         rc, out = self.run_cli("tools", "--days", "0", "--project", "acme")
         self.assertEqual(rc, 0)
         self.assertIn("project ~ acme", out)
+        self.assertIn("context added per turn", out)
         rc, out = self.run_cli("verify")
         self.assertEqual(json.loads(out)["backtest"], "PASS")
 

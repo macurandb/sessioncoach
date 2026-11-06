@@ -132,6 +132,15 @@ class TestSqlFiltersEquivalent(Synthetic):
                 fast, slow = self.both(analysis.tools_view, self.con, days=days, project=proj, today=self.today)
                 self.assertEqual(fast, slow, "days=%s project=%s" % (days, proj))
 
+    def test_tool_context_view_same(self):
+        self.con.executemany("INSERT INTO tool_calls (project_dir, tool_use_id, session_id, kind, ts, name, msg_id) VALUES (?,?,?,?,?,?,?)",
+                             [(r["project_dir"], "c%d" % i, r["session_id"], "main", r["ts"], "Read" if i % 2 else "mcp__x__y", r["msg_id"])
+                              for i, r in enumerate(self.con.execute("SELECT * FROM requests WHERE kind = 'main' LIMIT 300"))])
+        for days in (None, 1, 7, 30):
+            for proj in (None, "alpha", "gamma"):
+                fast, slow = self.both(analysis.tool_context_view, self.con, days=days, project=proj, today=self.today)
+                self.assertEqual(fast, slow, "days=%s project=%s" % (days, proj))
+
     def test_review_same(self):
         for off in (0, 1, 5, 20):
             run = self.today - dt.timedelta(days=off)

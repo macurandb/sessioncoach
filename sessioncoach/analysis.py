@@ -555,6 +555,56 @@ def tools_view(con, days=30, project=None, today=None):
             "per_day": sorted(per_day.items())}
 
 
+CONTEXT_JUMP_MAX = 50000  # a bigger step is a rebuilt context, not a result: on real data results stopped near 20k, and
+                          # the 50k+ steps, 0.5 % of the turns, held half the tokens over results of under 1 % of that
+
+
+def _percentile(ordered, q):
+    return ordered[min(int(q * len(ordered)), len(ordered) - 1)]
+
+
+def tool_context_view(con, days=30, project=None, today=None):
+    """Estimated context each tool adds, for main sessions. A turn's result is what the next request of the transcript
+    grew by, minus what the turn wrote itself; it comes from token counts, not from the outputs, which are not stored.
+    It holds all that arrived with the result, such as hook output and reminders: on real data about twice the result's
+    characters / 4, so compare tools with it rather than read it as exact. Thinking counts as written but is not kept, so
+    a result can read low (never below 0). Turns that shrink (compaction) or jump past CONTEXT_JUMP_MAX are left out, and
+    a turn with several kinds of tool is `mixed` rather than split.
+    `calls` and `measured` say how much of the window this covers (older rows have no msg_id to match)."""
+    start, end = window(days, today)
+    lo, hi = ts_bounds(start, end)
+    scope = [("project_dir LIKE ?", ["%" + project + "%"]) if project else ("", []), ts_range(lo, hi), ("kind = 'main'", [])]
+    turns, calls = {}, 0
+    for r in select(con, "tool_calls", [("ts IS NOT NULL", []), *scope], cols="ts, name, msg_id"):
+        day = _local_day(r["ts"])
+        if not day or not _in(day, start, end):
+            continue
+        calls += 1
+        if r["msg_id"]:
+            turns.setdefault(r["msg_id"], []).append(tool_family(r["name"]))
+    added, measured, seen, prev = {}, 0, set(), None
+    for r in select(con, "requests", scope, order="project_dir, file, ts, rowid", cols="project_dir, file, msg_id, input, output, "
+                    "cache_read, cache_write"):
+        if prev is not None and (prev["project_dir"], prev["file"]) == (r["project_dir"], r["file"]):
+            fams = turns.get(prev["msg_id"])
+            grew = pricing.context_tokens(r) - pricing.context_tokens(prev)
+            if fams and prev["msg_id"] not in seen and 0 <= grew <= CONTEXT_JUMP_MAX:
+                seen.add(prev["msg_id"])  # a resumed session copies its transcript: the same turn in two files counts once
+                measured += len(fams)
+                fam = fams[0] if len(set(fams)) == 1 else "mixed"
+                added.setdefault(fam, []).append(max(grew - (prev["output"] or 0), 0))
+        prev = r
+    rows = []
+    for fam, vals in added.items():
+        vals.sort()
+        total = sum(vals)
+        top = max(len(vals) // 100, 1)
+        rows.append({"tool": fam, "turns": len(vals), "tokens": total, "median": _percentile(vals, 0.5),
+                     "p90": _percentile(vals, 0.9), "top1_share": sum(vals[-top:]) / total if total else 0.0})
+    return {"window": {"start": start, "end": end}, "calls": calls, "measured": measured,
+            "rows": sorted(rows, key=lambda x: (-x["tokens"], x["tool"]))}
+
+
 IDLE_SUMMARY_OUT = 20000  # tokens of a summary when no compaction says (they ran 11k-22k here)
 IDLE_MIN_CASES = 5        # fewer returns than this on either side and the answer is "not enough data"
 IDLE_RAISE_TO = 400000    # the higher threshold weighed against the default
