@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 from . import __version__, analysis, collect, cost, paths, store
 
@@ -40,7 +41,9 @@ def cmd_ingest(args):
         traceback.print_exc()
     counts = {t: con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0] for t in ("requests", "cost_state", "subagents", "tool_calls")}
     store.checkpoint(con)
-    print(json.dumps({"db": paths.db_path(), "added": added, "total": counts, "files": stats}))
+    # scheduled runs append this line to ingest.log: "at" says when each one ran
+    print(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "db": paths.db_path(), "added": added, "total": counts,
+                      "files": stats}))
 
 
 def _no_db():

@@ -4,6 +4,7 @@
 
 - `sessioncoach check` warns when plan-limit samples stopped while sessions go on, which is what sessions that do not
   draw the status line (VS Code extension, desktop app) look like: its limit alerts do not see them.
+- `sessioncoach ingest` prints when it ran (`at`), so each line of `ingest.log` has its date.
 - The context-size alert (`context_tokens`) also fires from the prompt hook, so it reaches sessions that do not draw
   the status line, at the next prompt. One alert per session and threshold, whichever fires first. Installing only
   the hook now brings these desktop notifications too; `"context_tokens": []` in `alerts.json` turns them off.
