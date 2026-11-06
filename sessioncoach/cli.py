@@ -560,6 +560,7 @@ def _add(sub, name, **kw):
 
 def build_parser():
     p = argparse.ArgumentParser(prog="sessioncoach", description="Honest, local-only measurement for Claude Code.")
+    p.add_argument("--version", action="version", version=__version__)
     sub = p.add_subparsers(dest="cmd", parser_class=_Parser)
     i = _add(sub, "ingest")
     i.add_argument("--import-jsonl", metavar="DIR", help="also import an earlier JSONL snapshot")

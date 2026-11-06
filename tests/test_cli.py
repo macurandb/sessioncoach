@@ -148,6 +148,12 @@ class Reports(CliBase):
         self.assertEqual(rc, 2)
         self.assertIn("unknown command 'nope'", out)
 
+    def test_version_flag_says_what_the_command_says(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as stop:
+            cli.main(["--version"])
+        self.assertEqual((stop.exception.code, out.getvalue()), (0, __version__ + "\n"))
+
     def test_report_with_and_without_filters(self):
         rc, out = self.run_cli("report", "--days", "0")
         self.assertEqual(rc, 0)
