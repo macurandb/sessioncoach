@@ -20,6 +20,7 @@ from . import config, paths, store
 
 DEFAULT_ALERTS = config.DEFAULT_ALERTS  # lives in config; kept here for older callers
 SAMPLE_EVERY_S = 60
+SAMPLES_STALE_DAYS = 3  # no sample for this long while sessions go on: the status line is not seeing them
 # what the status line gives the user, said by `sessioncoach setup` before asking
 VALUE = ("See the 5-hour and weekly plan limits, and when they reset, on every turn: a limit does not catch you "
          "in the middle of a task. Your own status line keeps running first.")
@@ -192,6 +193,25 @@ def record_and_alert(con, data, now=None, cfg=None, root=None):
                 break
     con.commit()
     return out
+
+
+def sample_gap(con, now):
+    """-> None while samples keep up, or while nothing ran lately; else (last sample epoch or None, main sessions since it).
+    A sample needs `rate_limits`, so an API key never leaves one: the caller must not call None + sessions a failure."""
+    now = int(now)
+    cutoff = now - SAMPLES_STALE_DAYS * 86400
+    last = con.execute("SELECT MAX(ts) FROM limits_samples").fetchone()[0]
+    if last is not None and last >= cutoff:
+        return None
+
+    def iso(epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(epoch))
+    active = con.execute("SELECT 1 FROM requests WHERE kind = 'main' AND ts >= ? LIMIT 1", (iso(cutoff),)).fetchone()
+    if not active:
+        return None
+    sessions = con.execute("SELECT COUNT(DISTINCT session_id) FROM requests WHERE kind = 'main' AND ts >= ?",
+                           (iso(last or cutoff),)).fetchone()[0]
+    return last, sessions
 
 
 def render(info, color=True):

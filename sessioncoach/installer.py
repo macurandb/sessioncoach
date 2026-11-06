@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import time
 
 from . import (
     __version__,
@@ -582,6 +583,29 @@ def _scope_items(label, path):
     return items
 
 
+def _limits_items(now):
+    """Status line installed, sessions running, but no plan-limit samples: its alerts are blind and nothing else says so."""
+    path = paths.db_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        con = store.open_readonly(path)
+        try:
+            gap = limits.sample_gap(con, now.timestamp())
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return []
+    if gap is None:
+        return []
+    last, sessions = gap
+    if last is None:  # never sampled: an API key looks the same, so it stays a note
+        return [(OK, "plan limits", "no sample yet: they come from sessions that draw the status line, on Pro and Max plans")]
+    return [(WARN, "plan limits", "last sample %s, %d session%s since it: the status line alerts did not see them "
+             "(limits, context). Probably sessions outside the terminal (VS Code, desktop app): see docs/alerts-and-review.md"
+             % (time.strftime("%Y-%m-%d", time.localtime(last)), sessions, "" if sessions == 1 else "s"))]
+
+
 def _project_items(cwd=None):
     """Project-level findings: a double hook, and a CLAUDE.local.md with sessioncoach's block that git would commit."""
     S = settings_mod
@@ -701,6 +725,8 @@ def check(cwd=None, agents_dir=None, now=None, load_fn=launchd_loaded, mac=None)
                           "hook was added or removed) — run: sessioncoach handoff-install"))
     if not found:
         items.append((WARN, "status line / hook", "not installed in any scope — run: sessioncoach setup"))
+    if any(s == OK and n.startswith("status line [") for s, n, _ in items):
+        items += _limits_items(now)
     items += _project_items(cwd)
     if idleguard.enabled(alerts):
         problems = idle_guard_problems(cwd)

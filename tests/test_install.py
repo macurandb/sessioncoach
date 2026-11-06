@@ -527,6 +527,72 @@ class Check(Base):
         self.assertEqual(self.status(self.items(), "permissions"), [installer.OK])
 
 
+class CheckLimitSamples(Base):
+    """`check` says when the status line is installed but sessions run without it."""
+    NOW = dt.datetime(2026, 11, 5, 12, 0, tzinfo=dt.timezone.utc)
+
+    def setUp(self):
+        super().setUp()
+        limits.install(self.settings, kit_bin="/k/bin/sessioncoach")
+        patcher = mock.patch.object(installer, "command_problem", return_value=None)  # that path need not exist here
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def rows(self, sample_days_ago=None, request_days_ago=(0.5,)):
+        con = store.connect(paths.db_path())
+        now = self.NOW.timestamp()
+        if sample_days_ago is not None:
+            con.execute("INSERT INTO limits_samples (ts) VALUES (?)", (int(now - sample_days_ago * 86400),))
+        for i, ago in enumerate(request_days_ago):
+            ts = (self.NOW - dt.timedelta(days=ago)).isoformat().replace("+00:00", "Z")
+            con.execute("INSERT INTO requests (project_dir, file, msg_id, request_id, session_id, kind, ts) "
+                        "VALUES ('p', 'f', ?, 'r', ?, 'main', ?)", ("m%d" % i, "s%d" % i, ts))
+        con.commit()
+        con.close()
+
+    def items(self):
+        return [(s, d) for s, n, d in installer.check(cwd=self.cwd, now=self.NOW) if n == "plan limits"]
+
+    def test_no_database_says_nothing(self):
+        self.assertEqual(self.items(), [])
+
+    def test_recent_sample_says_nothing(self):
+        self.rows(sample_days_ago=1)
+        self.assertEqual(self.items(), [])
+
+    def test_stale_samples_with_sessions_since_warn(self):
+        self.rows(sample_days_ago=19, request_days_ago=(0.5, 2))
+        (status, detail), = self.items()
+        self.assertEqual(status, installer.WARN)
+        self.assertIn("2 sessions since it", detail)
+        self.assertIn("VS Code", detail)
+
+    def test_one_session_is_singular(self):
+        self.rows(sample_days_ago=19)
+        self.assertIn("1 session since it", self.items()[0][1])
+
+    def test_stale_samples_without_recent_sessions_say_nothing(self):
+        self.rows(sample_days_ago=19, request_days_ago=(10,))
+        self.assertEqual(self.items(), [])
+
+    def test_never_sampled_is_a_note_not_a_warning(self):  # an API key never leaves a sample
+        self.rows()
+        (status, detail), = self.items()
+        self.assertEqual(status, installer.OK)
+        self.assertIn("no sample yet", detail)
+
+    def test_without_the_status_line_says_nothing(self):
+        self.rows(sample_days_ago=19)
+        limits.uninstall(self.settings)
+        self.assertEqual(self.items(), [])
+
+    def test_unreadable_database_says_nothing(self):
+        self.rows(sample_days_ago=19)
+        with open(paths.db_path(), "wb") as fh:
+            fh.write(b"not a database, not at all, nothing here")
+        self.assertEqual(self.items(), [])
+
+
 class UninstallAll(Base):
     def test_removes_everything_keeps_data_and_is_idempotent(self):
         self.write_settings({"model": "x", "statusLine": {"type": "command", "command": "sh orca.sh"}})

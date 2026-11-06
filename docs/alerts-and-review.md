@@ -4,7 +4,10 @@
 
 On Pro and Max plans Claude Code passes the 5-hour window and weekly cap usage to the status line.
 `sessioncoach statusline-install` chains sessioncoach **after** your current status line (it is kept verbatim and
-still runs first; `statusline-uninstall` restores it). You then get:
+still runs first; `statusline-uninstall` restores it). All of this runs when Claude Code draws the status line, so
+sessions that do not draw it leave no samples and fire none of these alerts. On the machine this was measured on,
+terminal sessions left samples and VS Code extension and desktop app sessions none; `sessioncoach check` warns when
+samples stop while sessions go on. You then get:
 
 - `5h 42% ↻18:37 · 7d 61% ↻Sat 03:57 · ctx 12%` in the status line, yellow at 75 %, red at 90 %;
 - a desktop notification (macOS, Linux, Windows) when a threshold is crossed, once per window, or when the current
