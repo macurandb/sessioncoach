@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `sessioncoach --version` works, as `sessioncoach version` already did.
 - `sessioncoach check` warns when plan-limit samples stopped while sessions go on, which is what sessions that do not
   draw the status line (VS Code extension, desktop app) look like: its limit alerts do not see them.
 - The context-size alert (`context_tokens`) also fires from the prompt hook, so it reaches sessions that do not draw
