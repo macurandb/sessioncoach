@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `sessioncoach live` reads the running Claude sessions (fresh from their transcripts) with their context size, cache
+  lifetime and today's cost, plus the plan limits and the newest alerts, as one read-only JSON document for other
+  tools (`--json`; the contract is in `docs/live-json.md`).
 - `sessioncoach --version` works, as `sessioncoach version` already did.
 - The dashboard server reads the body of a POST it rejects, so a Windows client gets the error instead of a reset
   connection.
