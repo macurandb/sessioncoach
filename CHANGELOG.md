@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The status line says `⚠ /compact o /handoff` once a session passes the lowest context alert, so the advice reaches
+  terminals where desktop notifications do not (herdr, ssh). `"statusline_hint": false` in `alerts.json` turns it off.
 - `sessioncoach --version` works, as `sessioncoach version` already did.
 - The dashboard server reads the body of a POST it rejects, so a Windows client gets the error instead of a reset
   connection.
