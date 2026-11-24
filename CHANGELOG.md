@@ -16,6 +16,9 @@
   turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
   output.
 - Sessions started inside a Claude Code scratchpad count for the project that owns it, not as a project of their own.
+- `sessioncoach codemode` compares sessions with Code Mode (they call REPL) against the rest: tools per request, list
+  price per tool and context re-read per tool, overall and at equal context size per request, against the same days
+  and the days before Code Mode. Tools run inside a REPL block count; REPL and Poll do not.
 - On macOS, an alert that terminal-notifier cannot show (its notifications not allowed yet in System Settings) goes
   out through osascript instead of being lost.
 
