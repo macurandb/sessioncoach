@@ -492,6 +492,99 @@ def cmd_herdr_uninstall(args):
     return herdr.uninstall(home=args.app_home)
 
 
+def cmd_group(args):
+    from . import projects
+    if args.group_cmd is None:
+        print("sessioncoach group: choose list, add, assign, unassign, rename, remove or sync-herdr")
+        return 1
+    if args.group_cmd == "list":
+        return _group_list()
+    if args.group_cmd == "add":
+        gid = projects.add_group(args.id, args.label)
+        print("group %s (%s)" % (gid, args.label))
+        return 0
+    if args.group_cmd == "assign":
+        gid = projects.assign(args.group, args.target)
+        print("assigned %s to group %s" % (args.target, gid))
+        return 0
+    if args.group_cmd == "unassign":
+        n = projects.unassign(args.target)
+        print("unassigned %s (%d rule%s)" % (args.target, n, "" if n == 1 else "s"))
+        return 0
+    if args.group_cmd == "rename":
+        gid = projects.rename_group(args.group, args.label)
+        print("group %s renamed to %s" % (gid, args.label))
+        return 0
+    if args.group_cmd == "remove":
+        try:
+            gid = projects.remove_group(args.group, force=args.force)
+        except ValueError as e:
+            print("sessioncoach group remove: %s" % e)
+            return 1
+        print("removed group %s" % gid)
+        return 0
+    if args.group_cmd == "sync-herdr":
+        if args.json == "-":
+            mapping = json.load(sys.stdin)
+        else:
+            with open(args.json, encoding="utf-8") as fh:
+                mapping = json.load(fh)
+        print(projects.sync_herdr(mapping))
+        return 0
+    return 2
+
+
+def _group_list():
+    """Each group: its label, its rules and its API-equivalent spend today / 7 / 30 days, plus an
+    unassigned line naming the top 5 unassigned workspaces by 30-day cost."""
+    import datetime as dt
+
+    from . import projects
+    from .projects import UNASSIGNED, Labeler
+    if _no_db():
+        return 1
+    con = store.connect(paths.db_path())
+    labeler = Labeler.load()
+    doc = projects.load_doc()
+    groups = projects.group_labels(doc)
+    rules = [r for r in (doc.get("rules") or []) if isinstance(r, dict)]
+    today = dt.date.today().isoformat()
+    week7 = (dt.date.today() - dt.timedelta(days=6)).isoformat()
+    month30 = (dt.date.today() - dt.timedelta(days=29)).isoformat()
+    agg, workspaces = {}, {}
+    for row in con.execute("SELECT project_dir, day, usd FROM cost_slices WHERE day >= ?", (month30,)):
+        proj, tenant = labeler(row["project_dir"])
+        a = agg.setdefault(tenant, [0.0, 0.0, 0.0])
+        a[2] += row["usd"]
+        if row["day"] >= week7:
+            a[1] += row["usd"]
+        if row["day"] == today:
+            a[0] += row["usd"]
+        if tenant == UNASSIGNED:
+            workspaces[proj] = workspaces.get(proj, 0.0) + row["usd"]
+    con.close()
+    print("sessioncoach group — clients and their spend (API-equivalent)")
+    print("  %-20s %-14s %10s %10s %10s" % ("id", "label", "today", "7 days", "30 days"))
+
+    def row(gid, label):
+        a = agg.get(gid, [0.0, 0.0, 0.0])
+        print("  %-20s %-14s %10.2f %10.2f %10.2f" % (gid[:20], (label or gid)[:14], a[0], a[1], a[2]))
+
+    for gid, label in groups.items():
+        row(gid, label)
+        mine = [r["match"] for r in rules if r.get("tenant") == gid]
+        if mine:
+            print("      rules: %s" % ", ".join(mine[:8]))
+    for gid in sorted(set(agg) - set(groups)):
+        if gid != UNASSIGNED:
+            row(gid, gid)  # a tenant used by a rule but absent from groups shows its id
+    row(UNASSIGNED, UNASSIGNED)
+    top = sorted(workspaces.items(), key=lambda kv: -kv[1])[:5]
+    if top:
+        print("      top workspaces: %s" % ", ".join("%s $%.2f" % (p, u) for p, u in top))
+    return 0
+
+
 # What each command gives you, in one line: the first thing `help` and `<command> --help` say. The syntax comes after it.
 VALUE = {
     "ingest": "Keeps your history after Claude Code deletes its transcripts (30 days by default); setup schedules it.",
@@ -508,6 +601,7 @@ VALUE = {
     "hook-uninstall": "Stop the resume warning.",
     "alerts": "How close you are to the 5-hour and weekly limits and to your budgets.",
     "alert-log": "Whether the warnings help: what each said, why, and what you did next.",
+    "group": "Name your clients and see each one's spend today, this week and this month, from the folders they own.",
     "live": "What your running Claude sessions need now: context, cache expiry and new alerts, as JSON for other tools.",
     "review": "One change for today from yesterday's numbers, with no tokens spent.",
     "review-install": "Get the daily review without remembering to ask for it.",
@@ -597,6 +691,9 @@ DETAIL = {
     "live": "Read-only: reads the running Claude sessions from <config>/sessions and the tail of their transcripts, "
             "plus plan limits and recent alerts from metrics.db; never writes, ingests or notifies. "
             "The JSON contract is in docs/live-json.md; --demo prints a synthetic view with the same contract.",
+    "group": "Edits <data dir>/projects.json (a groups block and rules that carry a source); group sync-herdr "
+             "replaces only the rules the herdr-space-groups mod feeds in, and never touches rules written by hand "
+             "or by the CLI. Undo: group unassign / group remove.",
 }
 
 
@@ -652,6 +749,25 @@ def build_parser():
     lv.add_argument("--json", action="store_true")
     lv.add_argument("--since", type=int, default=None, help="only events with rowid > N (a previous cursor)")
     lv.add_argument("--demo", action="store_true", help="print a synthetic view (no data read), for screenshots and trying the panel")
+    grp = _add(sub, "group")
+    gsub = grp.add_subparsers(dest="group_cmd", parser_class=_Parser)
+    _gl = gsub.add_parser("list", help="each group's label, rules and spend today / 7 / 30 days, plus the unassigned workspaces")
+    _ga = gsub.add_parser("add", help="name a new group (or rename it by id)")
+    _ga.add_argument("label")
+    _ga.add_argument("--id", help="group id (default: a slug of the label)")
+    _gas = gsub.add_parser("assign", help="assign a folder or an fnmatch pattern to a group")
+    _gas.add_argument("group")
+    _gas.add_argument("target")
+    _gu = gsub.add_parser("unassign", help="drop a folder or pattern's rules")
+    _gu.add_argument("target")
+    _gr = gsub.add_parser("rename", help="give a group a new label")
+    _gr.add_argument("group")
+    _gr.add_argument("label")
+    _grm = gsub.add_parser("remove", help="delete a group")
+    _grm.add_argument("group")
+    _grm.add_argument("--force", action="store_true", help="also drop the rules that use it")
+    _gs = gsub.add_parser("sync-herdr", help="replace the herdr-sourced rules from the herdr-space-groups feed")
+    _gs.add_argument("--json", required=True, metavar="FILE|-", help="the feed's JSON, or - for stdin")
     rv = _add(sub, "review")
     rv.add_argument("--date", help="run date YYYY-MM-DD (default today; reviews the last active day before it)")
     rv.add_argument("--notify", action="store_true", help="send it now through the configured channels")
@@ -725,7 +841,7 @@ def main(argv=None):
     p, sub = build_parser()
     args = p.parse_args(argv)
     handlers = {"ingest": cmd_ingest, "report": cmd_report, "day": cmd_day, "alerts": cmd_alerts, "alert-log": cmd_alert_log,
-                "tools": cmd_tools, "live": cmd_live,
+                "tools": cmd_tools, "live": cmd_live, "group": cmd_group,
                 "statusline": cmd_statusline, "statusline-install": cmd_statusline_install,
                 "statusline-uninstall": cmd_statusline_uninstall, "verify": cmd_verify, "hook": cmd_hook,
                 "hook-install": cmd_hook_install, "hook-uninstall": cmd_hook_uninstall, "dashboard": cmd_dashboard, "demo": cmd_demo,

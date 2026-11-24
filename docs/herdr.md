@@ -10,17 +10,20 @@ their context size, how long their cache has left and today's cost, plus the new
 
 Top to bottom:
 
-- **Limits.** `5h 22% ↻18:37 · 7d 47%`: the 5-hour and 7-day plan limits, from the latest sample the
-  status line recorded. A percentage turns orange at 75 % and red at 90 %. Hidden when there is no
-  recent sample.
-- **Sessions.** One row per running Claude session: its project, context (`335k`), how long its cache
-  has left (`42 min`, or `expired`), and today's spend (`$12.40`). A session past your context
-  threshold gets a second muted line `⚠ /compact or /handoff`. Sessions whose terminal is in the
-  space you are looking at come first, then the rest; each group is ordered by recent activity.
-  Click a row to focus its terminal.
+- **One card per account.** The header names the account and its plan (`Personal · Max`), with a
+  status dot — green under 75 %, amber under 90 %, red at or above — from the higher of the two
+  windows, and a chevron that folds the card (the fold state is kept per account, in the shared key
+  `sessioncoach.folded`). Unfolded, each window shows a 10-cell bar, the percentage, when it resets
+  (5 h as `HH:MM`, 7 d as `ddd HH:MM`), and a line under it — `$18 in this window`, or
+  `$1,535 this week · at this pace 78 %` — then `Today $84 · 11 sessions`, then that account's
+  sessions (the active space's first, each ordered by recent activity).
+- **Groups.** One row per client: its label and today, 5 h and week as three right-aligned columns.
 - **Recent alerts.** The last five alert events, newest first.
 
-With no Claude Code session running, the panel says so; with no data yet it is empty.
+A session row shows the project, context (`335k`), how long its cache has left (`42 min`, or
+`expired`), and today's spend (`$12.40`); past your context threshold it adds a muted
+`⚠ /compact or /handoff` line. Click a row to focus its terminal. With no Claude Code session
+running, the panel says so; with no data yet it is empty.
 
 ## Install
 
@@ -64,9 +67,26 @@ The installer writes the keys the panel needs and keeps yours:
   `context_tokens` threshold in `alerts.json`, or 300000.
 - `args_extra` — extra arguments appended to the `live` command, e.g. `["--demo"]` to show the demo
   data instead of your own.
+- `sync_herdr_groups` — whether the panel feeds the `herdr-space-groups` assignments back into
+  sessioncoach (default true).
 
 The panel runs `sessioncoach live --json`, with `--since <cursor>` after the first poll. A non-zero
 exit, bad JSON or a `version` other than 1 shows a one-line error and keeps the last good data.
+
+## Groups and sync
+
+If you also run the community mod `herdr-space-groups`, it keeps the client each space belongs to in
+Herdr's shared key `"space-groups"`. On each poll the panel turns that into the `group sync-herdr`
+input — one `{name, folders}` per group, from the local spaces only — and, when it differs from what
+it sent before, stages it in `<app home>/mods/sessioncoach/.groups-sync.json` and runs
+`sessioncoach group sync-herdr --json <file>` (the `exec` helper has no stdin, hence the file).
+Nothing is shown on success; a failure shows a one-line error. The panel never syncs while
+`herdr-app check` runs.
+
+Install `herdr-space-groups` the way you install any Herdr mod — copy its folder into
+`<app home>/mods/` and let Herdr dock it — then assign spaces to clients in it. `group sync-herdr`
+replaces only the rules the panel sourced; rules you wrote by hand or with `sessioncoach group
+assign` are never touched (see [docs/groups.md](groups.md)).
 
 ## Toasts
 

@@ -349,5 +349,62 @@ class IngestCatchUp(CliBase):
         self.assertIn("Traceback", err.getvalue())
 
 
+class Group(CliBase):
+    def doc(self):
+        with open(os.path.join(self.data, "projects.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def test_add_assign_unassign_remove_roundtrip(self):
+        rc, out = self.run_cli("group", "add", "Pretty")
+        self.assertEqual(rc, 0)
+        self.assertIn("pretty", out)
+        folder = os.path.join(self.tmp, "work", "pretty")
+        rc, out = self.run_cli("group", "assign", "pretty", folder)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len([r for r in self.doc()["rules"] if r.get("tenant") == "pretty"]), 2)
+        rc, out = self.run_cli("group", "unassign", folder)
+        self.assertEqual(rc, 0)
+        self.assertEqual([r for r in self.doc()["rules"] if r.get("tenant") == "pretty"], [])
+        rc, out = self.run_cli("group", "remove", "pretty")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("pretty", self.doc()["groups"])
+
+    def test_remove_refuses_while_in_use_then_force(self):
+        self.run_cli("group", "add", "Pretty")
+        folder = os.path.join(self.tmp, "work", "pretty")
+        self.run_cli("group", "assign", "pretty", folder)
+        rc, out = self.run_cli("group", "remove", "pretty")
+        self.assertEqual(rc, 1)
+        self.assertIn("used by", out)
+        rc, out = self.run_cli("group", "remove", "pretty", "--force")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("pretty", self.doc()["groups"])
+        self.assertEqual([r for r in self.doc()["rules"] if r.get("tenant") == "pretty"], [])
+
+    def test_sync_herdr_from_a_file(self):
+        folder = os.path.join(self.tmp, "herdr")
+        path = os.path.join(self.tmp, "feed.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"groups": [{"name": "Pretty", "folders": [folder]}]}, fh)
+        rc, out = self.run_cli("group", "sync-herdr", "--json", path)
+        self.assertEqual(rc, 0)
+        self.assertIn("1 group", out)
+        self.assertTrue(any(r.get("source") == "herdr" and r.get("tenant") == "pretty" for r in self.doc()["rules"]))
+
+    def test_sync_herdr_from_stdin(self):
+        folder = os.path.join(self.tmp, "herdr")
+        rc, _out = self.run_cli("group", "sync-herdr", "--json", "-",
+                               stdin=json.dumps({"groups": [{"name": "Pretty", "folders": [folder]}]}))
+        self.assertEqual(rc, 0)
+        self.assertTrue(any(r.get("source") == "herdr" and r.get("tenant") == "pretty" for r in self.doc()["rules"]))
+
+    def test_list(self):
+        rc, out = self.run_cli("group", "list")
+        self.assertEqual(rc, 0)
+        self.assertIn("sessioncoach group", out)
+        self.assertIn("today", out)
+        self.assertIn("unassigned", out)
+
+
 if __name__ == "__main__":
     unittest.main()

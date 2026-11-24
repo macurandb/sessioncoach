@@ -1,16 +1,37 @@
-// A Herdr panel for sessioncoach: the running Claude sessions and what they need
-// right now, from `sessioncoach live --json`. Read-only: it runs that one command,
-// reads one config file and writes one shared key; nothing else.
+// A Herdr panel for sessioncoach: the running Claude sessions, per-account plan
+// limits and per-client (group) spend, from `sessioncoach live --json`. Read-only
+// except for the group sync it feeds back: it reads one shared key, writes one
+// staging file, runs `sessioncoach group sync-herdr`, and keeps its own fold state
+// in one shared key. Nothing else.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import {
-  exec, hc, readTextFile, appHome, checking, theme, spaces, agents, run,
+  exec, hc, readTextFile, writeTextFile, appHome, checking, theme, spaces, agents, run,
   shared, setShared, notify,
 } from "herdr";
 
-const DEFAULTS = { command: "sessioncoach", refresh_s: 30, toasts: true, hint_min_tokens: 300000 };
+const DEFAULTS = {
+  command: "sessioncoach", refresh_s: 30, toasts: true, hint_min_tokens: 300000,
+  sync_herdr_groups: true,
+};
 const TOASTED = "sessioncoach.toasted";
+const FOLDED = "sessioncoach.folded";
+const SYNC_FILE = "/mods/sessioncoach/.groups-sync.json";
+
+// The panel's own strings, in the language `live --json` reports (`lang`).
+const LANG = {
+  es: {
+    in_window: "en esta ventana", this_week: "esta semana", at_pace: "a este ritmo",
+    today: "Hoy", sessions: "sesiones", recent: "Alertas recientes", none: "No hay ninguna sesión de Claude Code en marcha",
+    groups: "Grupos", today_hdr: "hoy", week_hdr: "semana", compact: "⚠ /compact o /handoff",
+  },
+  en: {
+    in_window: "in this window", this_week: "this week", at_pace: "at this pace",
+    today: "Today", sessions: "sessions", recent: "Recent alerts", none: "No Claude Code session running",
+    groups: "Groups", today_hdr: "today", week_hdr: "week", compact: "⚠ /compact or /handoff",
+  },
+};
 
 // ---- number / time formatting ----
 
@@ -37,6 +58,13 @@ function hhmm(epoch) {
   return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
 
+function dddhhmm(epoch) {
+  if (epoch == null) return "";
+  const d = new Date(Number(epoch) * 1000);
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  return days[d.getDay()] + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
 function pctColor(t, pct) {
   if (pct >= 90) return t.blocked;
   if (pct >= 75) return t.working;
@@ -48,6 +76,8 @@ export default class SessionCoach extends View {
     this.cfg = { ...DEFAULTS };
     this.view = null;          // last good `live --json` document
     this.error = null;         // one-line error, shown above the last good data
+    this.syncError = null;     // one-line error from the group sync, or null when it is fine
+    this.lastSyncJson = null;  // the last sync-herdr payload this copy sent
     this.cursor = null;        // in memory only, never in shared
     this.firstPoll = true;     // the first poll after this start lists the backlog and toasts nothing
     this.events = [];          // events received, in memory, oldest first
@@ -68,6 +98,10 @@ export default class SessionCoach extends View {
     const s = Number(this.cfg.refresh_s);
     const secs = Number.isFinite(s) && s > 0 ? s : DEFAULTS.refresh_s;
     return Math.max(5, Math.min(600, secs)) * 1000;  // poll gently, timers run while hidden
+  }
+
+  langTable() {
+    return LANG[this.view && this.view.lang === "es" ? "es" : "en"];
   }
 
   async readConfig() {
@@ -96,6 +130,7 @@ export default class SessionCoach extends View {
           if (data.cursor != null && Number.isFinite(Number(data.cursor))) this.cursor = data.cursor;
           this.toastNew(data.events, first, lower);
         }
+        await this.syncGroups();
       } finally {
         this.polling = false;
       }
@@ -157,6 +192,53 @@ export default class SessionCoach extends View {
     return data;
   }
 
+  // Feed the herdr-space-groups assignments back into sessioncoach, once per change.
+  // `exec` has no stdin, so the payload is staged in a file the CLI reads. Local spaces only.
+  async syncGroups() {
+    if (this.cfg.sync_herdr_groups === false) return;
+    const sg = shared("space-groups");
+    if (!sg || typeof sg !== "object" || !Array.isArray(sg.groups) || typeof sg.spaces !== "object") return;
+    const byId = new Map();
+    for (const g of sg.groups) if (g && typeof g === "object" && g.id != null) byId.set(String(g.id), g);
+    const folders = new Map();
+    for (const sp of spaces()) {
+      if (sp.machine) continue;  // local machine only
+      const gid = sg.spaces[sp.id];
+      if (gid == null || !sp.folder) continue;
+      const key = String(gid);
+      if (!folders.has(key)) folders.set(key, []);
+      folders.get(key).push(sp.folder);
+    }
+    const groups = [];
+    for (const [gid, g] of byId) {
+      const fs = folders.get(gid);
+      if (!fs || !fs.length) continue;
+      groups.push({ name: (g && g.name) || gid, folders: fs });
+    }
+    if (!groups.length) return;
+    const text = JSON.stringify({ groups });
+    if (text === this.lastSyncJson) return;
+    const previous = this.lastSyncJson;  // null the first time: creates the file
+    const path = appHome() + SYNC_FILE;
+    try {
+      await writeTextFile(path, text, previous);
+    } catch (e) {
+      this.syncError = "group sync: cannot write " + path;
+      return;
+    }
+    this.lastSyncJson = text;
+    const command = typeof this.cfg.command === "string" && this.cfg.command ? this.cfg.command : DEFAULTS.command;
+    const args = [];
+    if (Array.isArray(this.cfg.args_prefix)) args.push(...this.cfg.args_prefix.map(String));
+    args.push("group", "sync-herdr", "--json", path);
+    try {
+      const result = await exec(command, args, { timeout: 15000 });
+      this.syncError = result.code === 0 ? null : "group sync failed (exit " + result.code + ")";
+    } catch (e) {
+      this.syncError = "group sync: " + (e && e.message ? e.message : String(e));
+    }
+  }
+
   // Match each session to a terminal: pid first, then cwd only when exactly one
   // agent has it (two Claude tabs in one repo are common).
   linkSessions(data) {
@@ -213,8 +295,13 @@ export default class SessionCoach extends View {
       }
       const children = [];
       if (this.error) children.push(div().px(12).pt(8).pb(2).text_size(12).text_color(t.blocked).child(this.error));
-      children.push(...this.limitsLine(t));
-      children.push(...this.sessionRows(t));
+      if (this.syncError) children.push(div().px(12).pt(8).pb(2).text_size(12).text_color(t.blocked).child(this.syncError));
+      const sessions = Array.isArray(this.view.sessions) ? this.view.sessions : [];
+      if (!sessions.length) {
+        children.push(div().px(12).pt(10).pb(4).text_size(12).text_color(t.dim).child(this.langTable().none));
+      }
+      children.push(...this.accountCards(t));
+      children.push(...this.groupRows(t));
       children.push(...this.alertRows(t));
       return root.children(children);
     } catch (e) {  // never throw out of render
@@ -222,74 +309,138 @@ export default class SessionCoach extends View {
     }
   }
 
-  limitsLine(t) {
-    const lim = this.view.limits;
-    if (!lim) return [];
-    const five = lim && lim.five_hour;
-    const seven = lim && lim.seven_day;
-    const group = (label, win) => {
-      const parts = [];
-      parts.push(div().flex_none().child(label + " "));
-      parts.push(div().flex_none().text_color(pctColor(t, win.pct)).child(Math.round(win.pct) + "%"));
-      if (label === "5h" && win.resets_at != null) parts.push(div().flex_none().text_color(t.dim).child(" ↻" + hhmm(win.resets_at)));
-      return h_flex().flex_none().gap(2).items_center().children(parts);
-    };
-    const g = [];
-    if (five && five.pct != null) g.push(group("5h", five));
-    if (seven && seven.pct != null) g.push(group("7d", seven));
-    if (!g.length) return [];
-    const parts = [];
-    g.forEach((gr, i) => {
-      parts.push(gr);
-      if (i < g.length - 1) parts.push(div().flex_none().px(6).text_color(t.dim).child("·"));
-    });
-    return [h_flex().px(12).pt(10).pb(4).gap(0).items_center().children(parts)];
+  accountPct(a) {
+    const f = a && a.five_hour ? a.five_hour.pct : null;
+    const s = a && a.seven_day ? a.seven_day.pct : null;
+    if (f == null && s == null) return null;
+    return Math.max(f == null ? 0 : f, s == null ? 0 : s);
   }
 
-  sessionRows(t) {
-    const sessions = Array.isArray(this.view.sessions) ? this.view.sessions : [];
+  dot(t, pct) {
+    const color = pct == null ? t.dim : pct >= 90 ? t.blocked : pct >= 75 ? t.working : t.done;
+    return div().flex_none().w(8).h(8).rounded_full().bg(color);
+  }
+
+  bar(t, pct) {
+    const filled = Math.max(0, Math.min(10, Math.round((pct || 0) / 10)));
+    const color = pct == null ? t.raised : pct >= 90 ? t.blocked : pct >= 75 ? t.working : t.done;
+    const cells = [];
+    for (let i = 0; i < 10; i++) cells.push(div().flex_none().w(6).h(8).rounded(1).bg(i < filled ? color : t.raised));
+    return h_flex().flex_none().gap(1).children(cells);
+  }
+
+  foldState() {
+    const f = shared(FOLDED);
+    return f && typeof f === "object" && !Array.isArray(f) ? f : {};
+  }
+
+  toggleFold(key) {
+    const folded = this.foldState();
+    folded[key] = !folded[key];
+    setShared(FOLDED, { ...folded });
+  }
+
+  windowRow(t, L, win, isWeek) {
+    const w = win || {};
+    const pct = w.pct;
+    const caption = isWeek
+      ? usd(w.window_usd) + " " + L.this_week
+        + (w.projected_pct != null ? " · " + L.at_pace + " " + Math.round(w.projected_pct) + "%" : "")
+      : usd(w.window_usd) + " " + L.in_window;
+    return v_flex().pt(2)
+      .child(h_flex().gap(8).items_center()
+        .child(this.bar(t, pct))
+        .child(div().flex_none().w(40).text_color(pct == null ? t.dim : pctColor(t, pct))
+          .child(pct == null ? "—" : Math.round(pct) + "%"))
+        .child(div().flex_none().text_color(t.dim).child(isWeek ? dddhhmm(w.resets_at) : hhmm(w.resets_at))))
+      .child(div().text_size(12).text_color(t.muted).child(caption));
+  }
+
+  accountCards(t) {
+    const L = this.langTable();
+    const accounts = Array.isArray(this.view.accounts) ? this.view.accounts : [];
+    const folded = this.foldState();
     const activeSpace = (spaces().find((s) => s.active) || {}).id;
+    return accounts.map((a) => {
+      const key = a.key != null ? String(a.key) : "";
+      const isFolded = Boolean(folded[key]);
+      const card = v_flex().id("acct-" + key).px(12).py(6);
+      card.child(
+        h_flex().gap(6).items_center().cursor_pointer().on_click(() => this.toggleFold(key))
+          .child(this.dot(t, this.accountPct(a)))
+          .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground)
+            .child((a.label || "?") + " · " + (a.plan || "")))
+          .child(div().flex_none().text_color(t.dim).child(isFolded ? "›" : "˅")),
+      );
+      if (!isFolded) {
+        card.child(this.windowRow(t, L, a.five_hour, false));
+        card.child(this.windowRow(t, L, a.seven_day, true));
+        card.child(div().pt(2).text_size(12).text_color(t.muted)
+          .child(L.today + " " + usd(a.today_usd) + " · " + (a.sessions || 0) + " " + L.sessions));
+        for (const s of this.sessionsFor(key, activeSpace)) card.child(this.sessionRow(t, s));
+      }
+      return card;
+    });
+  }
+
+  sessionsFor(accountKey, activeSpace) {
+    const sessions = Array.isArray(this.view.sessions) ? this.view.sessions : [];
+    const mine = sessions.filter((s) => (s.account == null ? null : String(s.account)) === accountKey);
     const active = [];
     const rest = [];
-    for (const s of sessions) {
+    for (const s of mine) {
       const link = this.sessionLink[s.session_id];
       if (link && link.space === activeSpace) active.push(s);
       else rest.push(s);
     }
     const byAct = (a, b) => ((b.last_activity || 0) - (a.last_activity || 0));
-    const ordered = active.sort(byAct).concat(rest.sort(byAct));
-    if (!ordered.length) {
-      return [div().px(12).pt(10).pb(6).text_size(12).text_color(t.dim).child("No Claude Code session running")];
-    }
+    return active.sort(byAct).concat(rest.sort(byAct));
+  }
+
+  sessionRow(t, s) {
+    const link = this.sessionLink[s.session_id];
     const hint = Number(this.cfg.hint_min_tokens);
     const min = Number.isFinite(hint) && hint > 0 ? hint : DEFAULTS.hint_min_tokens;
-    return ordered.map((s) => {
-      const link = this.sessionLink[s.session_id];
-      const row = v_flex()
-        .id("sess-" + s.pid)
-        .px(12)
-        .py(6)
-        .when(Boolean(link), (el) => el
-          .cursor_pointer()
-          .hover((h) => h.bg(t.hover))
-          .on_click(() => run("agent.focus", { terminal: link.address })))
-        .child(h_flex().gap(8).items_center()
-          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(s.project || "?"))
-          .child(div().flex_none().text_color(t.muted).child(fmtTokens(s.context_tokens)))
-          .child(div().flex_none().text_color(t.dim).child(cacheLeft(s, this.view.now)))
-          .child(div().flex_none().text_color(t.muted).child(usd(s.today_usd))));
-      if (s.context_tokens != null && s.context_tokens >= min) {
-        row.child(div().pt(1).text_size(12).text_color(t.muted).child("⚠ /compact or /handoff"));
-      }
-      return row;
-    });
+    const row = v_flex()
+      .id("sess-" + s.pid)
+      .py(4)
+      .when(Boolean(link), (el) => el
+        .cursor_pointer()
+        .hover((h) => h.bg(t.hover))
+        .on_click(() => run("agent.focus", { terminal: link.address })))
+      .child(h_flex().gap(8).items_center()
+        .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(s.project || "?"))
+        .child(div().flex_none().text_color(t.muted).child(fmtTokens(s.context_tokens)))
+        .child(div().flex_none().text_color(t.dim).child(cacheLeft(s, this.view.now)))
+        .child(div().flex_none().text_color(t.muted).child(usd(s.today_usd))));
+    if (s.context_tokens != null && s.context_tokens >= min) {
+      row.child(div().pt(1).text_size(12).text_color(t.muted).child(this.langTable().compact));
+    }
+    return row;
+  }
+
+  groupRows(t) {
+    const groups = Array.isArray(this.view.groups) ? this.view.groups : [];
+    if (!groups.length) return [];
+    const L = this.langTable();
+    const head = h_flex().px(12).pb(2).gap(8)
+      .child(div().flex_1().min_w(0).text_size(11).font_medium().text_color(t.dim).child(L.groups))
+      .child(div().flex_none().w(60).text_right().text_size(11).text_color(t.dim).child(L.today_hdr))
+      .child(div().flex_none().w(60).text_right().text_size(11).text_color(t.dim).child("5 h"))
+      .child(div().flex_none().w(60).text_right().text_size(11).text_color(t.dim).child(L.week_hdr));
+    const rows = groups.map((g) => h_flex().px(12).py(2).gap(8).items_center()
+      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(g.label || g.id || "?"))
+      .child(div().flex_none().w(60).text_right().text_color(t.muted).child(usd(g.today_usd)))
+      .child(div().flex_none().w(60).text_right().text_color(t.muted).child(usd(g.five_hour_usd)))
+      .child(div().flex_none().w(60).text_right().text_color(t.muted).child(usd(g.week_usd))));
+    return [head, ...rows];
   }
 
   alertRows(t) {
     const newest = this.events.slice(-5).reverse();
     if (!newest.length) return [];
     return [
-      div().px(12).pt(10).pb(3).text_size(11).font_medium().text_color(t.dim).child("Recent alerts"),
+      div().px(12).pt(10).pb(3).text_size(11).font_medium().text_color(t.dim).child(this.langTable().recent),
       ...newest.map((e) => h_flex()
         .id("ev-" + e.id)
         .px(12)

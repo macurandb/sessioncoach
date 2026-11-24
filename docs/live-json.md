@@ -71,6 +71,58 @@ removal or a change of a field's meaning bumps the version. Treat an unknown `ve
 Epoch seconds of the moment the document was built. `cache_expires_at`, `last_activity` and
 `ts` are comparable against it.
 
+### `lang`
+
+`"es"` or `"en"`, from the same order every message uses (`config.notice_lang`): so a panel can
+localise its own strings to match the user's language.
+
+### `accounts`
+
+One object per transcript root that has a running session or a plan-limit sample in the last 6 h,
+each with:
+
+```json
+{
+  "key": "personal",
+  "label": "Personal · Max",
+  "plan": "Max",
+  "today_usd": 12.40,
+  "sessions": 2,
+  "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
+  "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
+                "projected_pct": 78.0}
+}
+```
+
+- `key` — the account key: the `accounts.json` id that owns the root, else `auto:<org hash>`, else
+  `"unknown"`.
+- `label` — the `accounts.json` label of that account, else a plan word from `accounts.detect`
+  (`"Max"`, `"Team"`, `"Pro"`), else the config dir's basename. Never an email or a name.
+- `plan` — that plan word, or `null`.
+- `today_usd` — the root's `cost_slices` today.
+- `sessions` — the number of running sessions on that root.
+- `five_hour` / `seven_day` — `pct` and `resets_at` are that root's latest non-null sample of the
+  window in the last 6 h (as `limits` is, but filtered by root); `window_usd` is the list-price USD
+  of that root's `requests` whose `ts` falls in `[resets_at - window, now]` (5 hours, or 7 days);
+  `eta` is `limits.pace(...)`. The seven-day window adds `projected_pct` — `pct` extrapolated to the
+  full 7 days once at least 6 h of the window have elapsed, else `null`.
+
+### `groups`
+
+One object per tenant that has spend or a running session, ordered by `week_usd` descending with
+`"unassigned"` last:
+
+```json
+{"id": "pretty", "label": "Pretty", "today_usd": 10.0, "five_hour_usd": 6.0,
+ "week_usd": 900.0, "sessions": 1}
+```
+
+- `label` is the group's label from `projects.json`'s `"groups"` block, else the tenant id itself.
+- `today_usd` and `week_usd` are `cost_slices` (today, and the last 7 days).
+- `five_hour_usd` is the list-price USD of all `requests` since the earliest current 5-hour window
+  start across the accounts, or `null` when no account has a 5-hour sample.
+- `sessions` is the number of running sessions in the group.
+
 ### `limits`
 
 For each window, the latest `limits_samples` row (from any session) of the last 6 h that reports it:
@@ -88,6 +140,8 @@ sessions may be listed there). Each object:
 - `session_id` — the session id, which also names its transcript (`<projects>/*/<session_id>.jsonl`).
 - `cwd` — the working directory from the session file.
 - `project` — the project label (`projects.Labeler`), or the `cwd` basename when there is no transcript.
+- `account` — the account key of the transcript root this session reads from (`null` with no transcript).
+- `group` — the tenant (group) id, or `"unassigned"` when no rule assigns one.
 - `status` — the session's status, as written by Claude Code.
 - `model` — the model of the last turn that reported usage.
 - `context_tokens` — input + cache read + cache write tokens of that turn.
