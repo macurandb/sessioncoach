@@ -1,12 +1,16 @@
-"""projects.json: groups, rules and the Herdr feed, on a temp data dir.
+"""projects.json: groups, rules, the Herdr feed and the write lock, on a temp data dir.
 
-Every function writes atomically and keeps the keys it does not own; `sync_herdr` only ever
-replaces the rules it sourced itself, so cli/manual rules and hand-written keys survive.
+Every mutation goes through `edit()` (an exclusive lock), writes atomically and keeps the keys it
+does not own; `sync_herdr` only ever replaces the rules it sourced itself, so cli/manual rules and
+hand-written keys survive.
 """
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
+from unittest import mock
 
 import isolate
 
@@ -51,7 +55,7 @@ class Doc(Base):
 
     def test_save_is_atomic_and_private(self):
         projects.add_group("x", "X")
-        self.assertEqual(os.listdir(self.data), ["projects.json"])  # no .tmp or backup left behind
+        self.assertEqual(os.listdir(self.data), ["projects.json"])  # no .tmp, .lock or backup left behind
         if os.name != "nt":
             self.assertEqual(os.stat(self.path()).st_mode & 0o777, 0o600)
 
@@ -78,17 +82,96 @@ class Doc(Base):
         projects.rename_group("pretty", "P")
         self.assertEqual(self.doc()["groups"]["pretty"], {"label": "P"})
 
-    def test_sync_groups_bad_shapes(self):
-        self.assertEqual(projects._sync_groups("nope"), [])
-        self.assertEqual(projects._sync_groups({"groups": "nope"}), [])
-        self.assertEqual(projects._sync_groups({"groups": [7, {"name": ""}, {"name": "  "}]}), [])
-        self.assertEqual(projects._sync_groups({"groups": [{"name": "  "}]}), [])
-
     def test_apply_sync_replaces_a_bad_groups_block(self):
         doc = {"groups": "x", "rules": [{"match": "a", "tenant": "t", "source": "herdr"}]}
         new = projects._apply_sync(doc, {"groups": [{"name": "Pretty", "folders": [os.path.join(self.tmp, "p")]}]})
         self.assertIsInstance(new["groups"], dict)
         self.assertEqual(new["groups"]["pretty"]["label"], "Pretty")
+
+
+class InvalidFile(Base):
+    """A present-but-broken projects.json is never silently overwritten."""
+
+    def test_missing_file_is_an_empty_doc(self):
+        self.assertEqual(projects._read_for_edit(self.path()), {})
+
+    def test_invalid_json_refuses_every_mutation(self):
+        for text in ("{broken", "[1, 2]", '"x"', "null"):
+            with open(self.path(), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            for fn, args in ((projects.add_group, ("x", "X")), (projects.assign, ("x", "-a")),
+                             (projects.sync_herdr, ({"groups": []},))):
+                with self.assertRaises(projects.ProjectsError, msg=text):
+                    fn(*args)
+            with open(self.path(), encoding="utf-8") as fh:  # the file is untouched
+                self.assertEqual(fh.read(), text)
+
+    def test_unreadable_file_refuses(self):
+        with open(self.path(), "w", encoding="utf-8") as fh:
+            fh.write('{"groups": {}}')
+        with mock.patch("builtins.open", side_effect=PermissionError("nope")), self.assertRaises(projects.ProjectsError):
+            projects.add_group("x", "X")
+
+    def test_display_still_reads_a_bad_file(self):
+        with open(self.path(), "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        self.assertEqual(projects.load_doc(), {})
+        self.assertEqual(projects.group_labels(), {})
+
+
+class Lock(Base):
+    def test_a_stale_lock_is_broken(self):
+        lock = self.path() + ".lock"
+        with open(lock, "w", encoding="utf-8") as fh:
+            fh.write("held")
+        old = time.time() - 2 * projects.LOCK_STALE_S
+        os.utime(lock, (old, old))
+        projects.add_group("a", "A")
+        self.assertEqual(self.doc()["groups"], {"a": {"label": "A"}})
+        self.assertFalse(os.path.exists(lock))
+
+    def test_a_fresh_lock_times_out(self):
+        lock = self.path() + ".lock"
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            with mock.patch.object(projects, "LOCK_TIMEOUT_S", 0.05), self.assertRaises(projects.ProjectsError):
+                projects.add_group("a", "A")
+        finally:
+            os.close(fd)
+            os.remove(lock)
+
+    def test_concurrent_writers_both_survive(self):
+        # writer B must wait for writer A's lock, then read A's result and add its own
+        held = threading.Event()
+        seen = {}
+
+        def writer_a():
+            with projects.edit() as doc:
+                projects._groups_of(doc)["a"] = {"label": "A"}
+                projects.save_doc(doc)
+                held.set()
+                time.sleep(0.2)  # hold the lock long enough for B to start and block
+
+        def writer_b():
+            held.wait(5)
+            with projects.edit() as doc:
+                seen["b_saw_a"] = "a" in projects._groups_of(doc)
+                projects._groups_of(doc)["b"] = {"label": "B"}
+                projects.save_doc(doc)
+
+        ta, tb = threading.Thread(target=writer_a), threading.Thread(target=writer_b)
+        ta.start()
+        tb.start()
+        ta.join(10)
+        tb.join(10)
+        self.assertEqual(set(self.doc()["groups"]), {"a", "b"})
+        self.assertTrue(seen["b_saw_a"])  # B read the document after A wrote it
+
+    def test_a_failing_replace_leaves_the_old_file_intact(self):
+        self.write({"groups": {"x": {"label": "X"}}})
+        with mock.patch.object(os, "replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            projects.add_group("y", "Y")
+        self.assertEqual(self.doc()["groups"], {"x": {"label": "X"}})
 
 
 class Assign(Base):
@@ -116,6 +199,24 @@ class Assign(Base):
         self.assertEqual([r["match"] for r in rules].count(enc), 1)
         self.assertEqual(next(r for r in rules if r["match"] == enc)["tenant"], "acme")
 
+    def test_a_folder_with_glob_characters_is_a_folder(self):
+        folder = os.path.join(self.tmp, "client [x]")
+        projects.assign("acme", folder)
+        enc = encode_dir(os.path.abspath(folder))
+        self.assertEqual([r["match"] for r in self.doc()["rules"]], [enc, enc + "-*"])
+
+    def test_an_existing_directory_with_glob_characters_is_a_folder(self):
+        folder = os.path.join(self.tmp, "client [x]")
+        os.makedirs(folder)
+        projects.assign("acme", folder)  # a relative path that exists: still a folder
+        enc = encode_dir(os.path.abspath(folder))
+        self.assertEqual([r["match"] for r in self.doc()["rules"]], [enc, enc + "-*"])
+
+    def test_a_tilde_path_is_a_folder(self):
+        projects.assign("acme", "~/work/shop")
+        enc = encode_dir(os.path.abspath(os.path.expanduser("~/work/shop")))
+        self.assertEqual([r["match"] for r in self.doc()["rules"]], [enc, enc + "-*"])
+
     def test_unassign_removes_a_folders_two_rules(self):
         folder = os.path.join(self.tmp, "work", "shop")
         projects.assign("acme", folder)
@@ -129,7 +230,7 @@ class Assign(Base):
 
     def test_remove_refuses_while_in_use_then_force(self):
         projects.assign("acme", os.path.join(self.tmp, "work"))
-        with self.assertRaises(ValueError):
+        with self.assertRaises(projects.ProjectsError):
             projects.remove_group("acme")
         projects.remove_group("acme", force=True)
         self.assertNotIn("acme", self.doc()["groups"])
@@ -150,6 +251,24 @@ class SyncHerdr(Base):
         self.assertIn("unchanged", projects.sync_herdr(mapping))
         self.assertEqual(json.dumps(self.doc(), sort_keys=True), before)  # the file was not rewritten
 
+    def test_write_suppression_when_unchanged(self):
+        folder = os.path.join(self.tmp, "pretty")
+        mapping = {"groups": [{"name": "Pretty", "folders": [folder]}]}
+        projects.sync_herdr(mapping)
+        with mock.patch.object(projects, "save_doc") as save:
+            out = projects.sync_herdr(mapping)
+        self.assertIn("unchanged", out)
+        save.assert_not_called()
+
+    def test_an_empty_groups_list_removes_all_herdr_rules(self):
+        folder = os.path.join(self.tmp, "pretty")
+        projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [folder]}]})
+        projects.assign("manual", "-Users-x-*")
+        projects.sync_herdr({"groups": []})
+        doc = self.doc()
+        self.assertEqual([r for r in doc["rules"] if r["source"] == "herdr"], [])
+        self.assertEqual([r for r in doc["rules"] if r["source"] == "cli"], doc["rules"])  # the cli rule is the only one left
+
     def test_nested_groups_use_the_leaf_name(self):
         folder = os.path.join(self.tmp, "pretty")
         projects.sync_herdr({"groups": [{"name": "Clients/Pretty", "folders": [folder]}]})
@@ -157,9 +276,25 @@ class SyncHerdr(Base):
         self.assertIn("pretty", groups)
         self.assertEqual(groups["pretty"]["label"], "Pretty")
 
-    def test_skips_empty_and_home_folders(self):
+    def test_same_leaf_name_merges_into_one_group(self):
+        a = os.path.join(self.tmp, "a")
+        b = os.path.join(self.tmp, "b")
+        projects.sync_herdr({"groups": [{"name": "Clients/Pretty", "folders": [a]},
+                                        {"name": "Other/Pretty", "folders": [b]}]})
+        groups = self.doc()["groups"]
+        self.assertEqual(list(groups), ["pretty"])  # one client, not two
+        self.assertEqual(groups["pretty"]["label"], "Pretty")
+
+    def test_colliding_slugs_are_disambiguated(self):
+        a = os.path.join(self.tmp, "a")
+        b = os.path.join(self.tmp, "b")
+        projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [a]},
+                                        {"name": "Pretty!", "folders": [b]}]})
+        self.assertEqual(list(self.doc()["groups"]), ["pretty", "pretty-2"])
+
+    def test_skips_the_home_folder(self):
         folder = os.path.join(self.tmp, "ok")
-        mapping = {"groups": [{"name": "X", "folders": ["", "  ", "~", paths.HOME, folder]}]}
+        mapping = {"groups": [{"name": "X", "folders": [paths.HOME, folder]}]}
         projects.sync_herdr(mapping)
         herdr = [r for r in self.doc()["rules"] if r.get("source") == "herdr"]
         enc = encode_dir(os.path.abspath(folder))
@@ -169,6 +304,33 @@ class SyncHerdr(Base):
         self.write({"groups": {"pretty": {"label": "Pretty (mine)"}}})
         projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [os.path.join(self.tmp, "p")]}]})
         self.assertEqual(self.doc()["groups"]["pretty"]["label"], "Pretty (mine)")
+
+
+class SyncValidation(Base):
+    def assert_bad(self, mapping):
+        with self.assertRaises(projects.SyncError):
+            projects.sync_herdr(mapping)
+        self.assertEqual(self.doc(), {})  # the file was never touched
+
+    def test_shape_errors(self):
+        self.assert_bad("nope")
+        self.assert_bad({"groups": "nope"})
+        self.assert_bad({"groups": [7]})
+        self.assert_bad({"groups": [{"name": ""}]})
+        self.assert_bad({"groups": [{"name": "x" * 101}]})
+        self.assert_bad({"groups": [{"name": "x", "folders": "nope"}]})
+        self.assert_bad({"groups": [{"name": "x", "folders": ["not-absolute"]}]})
+        self.assert_bad({"groups": [{"name": "x", "folders": ["/" + "x" * 5000]}]})
+        self.assert_bad({"groups": [{"name": "x", "folders": ["/a"] * 1001}]})
+        self.assert_bad({"groups": [{"name": "g%d" % i} for i in range(201)]})
+
+    def test_invalid_input_does_not_erase_existing_herdr_rules(self):
+        folder = os.path.join(self.tmp, "p")
+        projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [folder]}]})
+        before = json.dumps(self.doc(), sort_keys=True)
+        with self.assertRaises(projects.SyncError):
+            projects.sync_herdr({"groups": "bad"})
+        self.assertEqual(json.dumps(self.doc(), sort_keys=True), before)
 
 
 if __name__ == "__main__":

@@ -15,13 +15,13 @@ removal or a change of meaning bumps the version):
                  "seven_day": {"pct": 47.0, "resets_at": 1795737600}},
       "sessions": [
         {"pid": 30313, "session_id": "...", "cwd": "/abs/path", "project": "label", "status": "busy",
-         "account": "personal", "group": "pretty",
+         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "pretty",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": 1795530900,
          "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70,
          "today_usd": 12.40, "source": "transcript", "match": "pid"}
       ],
       "accounts": [
-        {"key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 12.40, "sessions": 2,
+        {"id": "1f8ab3c9d0e2", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 12.40, "sessions": 2,
          "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
          "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
                        "projected_pct": 78.0}}
@@ -44,6 +44,7 @@ the output.
 """
 import datetime as dt
 import glob
+import hashlib
 import json
 import math
 import os
@@ -313,7 +314,7 @@ def _live_sessions(con=None, labeler=None):
                  "model": None, "context_tokens": None, "last_activity": None,
                  "cache_ttl_s": None, "cache_expires_at": None, "rewrite_usd": None,
                  "today_usd": None, "source": None, "match": "pid",
-                 "_root": root, "_tenant": tenant}
+                 "_root": root, "_tenant": tenant, "_account_id": _identity(cfg)}
             if tpath and info:
                 s["source"] = "transcript"
                 _apply_info(s, info)
@@ -391,6 +392,13 @@ def _iso(epoch):
     return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _identity(path):
+    """First 12 hex of sha256 of a normalised path: a stable, unique identity for one account's
+    config dir (used for both `accounts[].id` and `sessions[].account_id`, so the panel can match
+    them)."""
+    return hashlib.sha256(os.path.normpath(path).encode("utf-8")).hexdigest()[:12]
+
+
 def _plan_word(det):
     """"Max" | "Team" | "Pro" from an account's org type, else None."""
     ot = (det.get("org_type") or "").lower()
@@ -459,6 +467,39 @@ def _projected_pct(pct, resets_at, now):
     return round(pct * 7 * 86400 / elapsed, 1)
 
 
+def _agg_weight(r):
+    """List-price USD of one aggregated (model, long-prompt) request group — the exact total
+    `pricing.weight` gives for the group's requests, since all of them share the same price tier."""
+    prices, _exact, key = pricing.price_info(r["model"])
+    if r["long"] and key in pricing.LONG_PRICES:
+        prices = pricing.LONG_PRICES[key]
+    pin, pout, pcr, pcw1h, pcw5m = prices
+    return ((r["input"] or 0) * pin + (r["output"] or 0) * pout + (r["cache_read"] or 0) * pcr
+            + (r["cw1h"] or 0) * pcw1h + (r["cw5"] or 0) * pcw5m) / 1e6
+
+
+def _window_rows(con, start_epoch, now, root=None):
+    """(root, project_dir, weight) for the requests with `start_epoch <= ts <= now` (one root, or
+    all), summed in SQL by (root, project_dir, model, long-prompt) and priced in Python: a handful
+    of rows, never one per request. The cache-write columns follow `pricing._cache_writes` in SQL,
+    so rows without the 1 h / 5 min split still count as 1 h writes."""
+    lo, hi = _iso(start_epoch), _iso(now + 1)
+    sql = ("SELECT root, project_dir, model, "
+           "CASE WHEN input + cache_read + cache_write > ? THEN 1 ELSE 0 END AS long, "
+           "SUM(input) AS input, SUM(output) AS output, SUM(cache_read) AS cache_read, "
+           "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN COALESCE(cache_write, 0) "
+           "ELSE COALESCE(cache_write_1h, 0) END) AS cw1h, "
+           "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN 0 "
+           "ELSE COALESCE(cache_write_5m, 0) END) AS cw5 "
+           "FROM requests WHERE ts >= ? AND ts < ?")
+    args = [pricing.LONG_PROMPT, lo, hi]
+    if root is not None:
+        sql += " AND root IS ?"
+        args.append(root)
+    sql += " GROUP BY root, project_dir, model, long"
+    return [(r["root"], r["project_dir"], _agg_weight(r)) for r in con.execute(sql, args)]
+
+
 def _accounts_groups(con, sessions, now, labeler):
     """The new `accounts` and `groups` keys, aggregated in SQL where possible so 20 000 requests
     still answer well under a second: a couple of GROUP BY passes, one pass over the window's
@@ -496,30 +537,21 @@ def _accounts_groups(con, sessions, now, labeler):
                 if has_root and (not has_login or seen is None or row["login_at"] == seen):
                     root_today[row["root"]] = root_today.get(row["root"], 0.0) + row["usd"]
 
-    # one pass over the window's requests covers the five-hour and seven-day sums
+    # window sums, aggregated in SQL by (root, project_dir, model, long-prompt) and priced in Python
     root_five, root_seven, group_five = {}, {}, {}
-    five_resets = [samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")]
-    seven_resets = [samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")]
-    global_five_start = min(five_resets) - 5 * 3600 if five_resets else None
-    starts = [r - 5 * 3600 for r in five_resets] + [r - 7 * 86400 for r in seven_resets]
-    if has_reqs and starts:
-        lo, hi = _iso(min(starts) - 2), _iso(now + 2)
-        for r in con.execute("SELECT project_dir, root, model, ts, input, output, cache_read, cache_write, "
-                             "cache_write_5m, cache_write_1h FROM requests WHERE ts >= ? AND ts < ?", (lo, hi)):
-            t = cost.parse_ts(r["ts"])
-            if t is None:
-                continue
-            epoch = int(t.timestamp())
-            w = pricing.weight(r["model"], r)
-            root, tenant = r["root"], labeler(r["project_dir"])[1]
-            f = samples.get(root, {}).get("five", {})
-            s = samples.get(root, {}).get("seven", {})
-            mine = epoch >= (login.get(root, (None,))[0] or 0)  # this account's request, not the previous login's
-            if mine and f.get("reset") and epoch >= f["reset"] - 5 * 3600:
-                root_five[root] = root_five.get(root, 0.0) + w
-            if mine and s.get("reset") and epoch >= s["reset"] - 7 * 86400:
-                root_seven[root] = root_seven.get(root, 0.0) + w
-            if global_five_start is not None and epoch >= global_five_start:
+    five_resets = {r: samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")}
+    seven_resets = {r: samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")}
+    global_five_start = min(five_resets.values()) - 5 * 3600 if five_resets else None
+    if has_reqs:
+        for r, reset in five_resets.items():
+            start = max(reset - 5 * 3600, login.get(r, (None,))[0] or 0)
+            root_five[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+        for r, reset in seven_resets.items():
+            start = max(reset - 7 * 86400, login.get(r, (None,))[0] or 0)
+            root_seven[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+        if global_five_start is not None:
+            for _rr, project_dir, w in _window_rows(con, global_five_start, now):
+                tenant = labeler(project_dir)[1]
                 group_five[tenant] = group_five.get(tenant, 0.0) + w
 
     accs = accounts.load_map()
@@ -528,17 +560,19 @@ def _accounts_groups(con, sessions, now, labeler):
         key, label, plan = _account_info(root, accs)
         f = samples.get(root, {}).get("five", {})
         s = samples.get(root, {}).get("seven", {})
+        login_epoch = login.get(root, (None,))[0]
         accounts_out.append({
+            "id": _identity(os.path.dirname(os.path.normpath(root))),
             "key": key, "label": label, "plan": plan,
             "today_usd": round(root_today.get(root, 0.0), 2),
             "sessions": sum(1 for x in sessions if x.get("_root") == root),
             "five_hour": {"pct": f.get("pct"), "resets_at": f.get("reset"),
                           "window_usd": round(root_five[root], 2) if root in root_five else None,
-                          "eta": limits.pace(con, "five_hour", f["reset"], now, f["pct"])
+                          "eta": limits.pace(con, "five_hour", f["reset"], now, f["pct"], root=root, since=login_epoch)
                           if f.get("reset") and f.get("pct") is not None else None},
             "seven_day": {"pct": s.get("pct"), "resets_at": s.get("reset"),
                           "window_usd": round(root_seven[root], 2) if root in root_seven else None,
-                          "eta": limits.pace(con, "seven_day", s["reset"], now, s["pct"])
+                          "eta": limits.pace(con, "seven_day", s["reset"], now, s["pct"], root=root, since=login_epoch)
                           if s.get("reset") and s.get("pct") is not None else None,
                           "projected_pct": _projected_pct(s.get("pct"), s.get("reset"), now)},
         })
@@ -621,6 +655,7 @@ def view(now=None, since=None, con=None):
     for s in sessions:
         root = s.pop("_root", None)
         s["group"] = s.pop("_tenant", None) or UNASSIGNED
+        s["account_id"] = s.pop("_account_id", None)
         s["account"] = _account_info(root, accs)[0] if root else None
     return {"version": VERSION, "now": now, "lang": lang, "limits": limits, "sessions": sessions,
             "accounts": accounts_out, "groups": groups_out, "events": events, "cursor": cursor}
@@ -634,17 +669,17 @@ def demo_view(now=None):
     now = int(now if now is not None else time.time())
     sessions = [
         {"pid": 4242, "session_id": "demo-shop", "cwd": "/home/you/shop", "project": "shop", "status": "busy",
-         "account": "personal", "group": "pretty",
+         "account": "personal", "account_id": "000000000001", "group": "pretty",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": now - 60,
          "cache_ttl_s": 3600, "cache_expires_at": now - 60 + 3600, "rewrite_usd": 2.68,
          "today_usd": 12.40, "source": "transcript", "match": "pid"},
         {"pid": 4243, "session_id": "demo-api", "cwd": "/home/you/api", "project": "api", "status": "busy",
-         "account": "team", "group": "globex",
+         "account": "team", "account_id": "000000000002", "group": "globex",
          "model": "claude-sonnet-5-5", "context_tokens": 120000, "last_activity": now - 7200,
          "cache_ttl_s": 3600, "cache_expires_at": now - 7200 + 3600, "rewrite_usd": 0.40,
          "today_usd": 3.10, "source": "transcript", "match": "pid"},
         {"pid": 4244, "session_id": "demo-docs", "cwd": "/home/you/docs", "project": "docs", "status": "idle",
-         "account": "personal", "group": "unassigned",
+         "account": "personal", "account_id": "000000000001", "group": "unassigned",
          "model": "claude-haiku-5-5", "context_tokens": 42000, "last_activity": now - 1500,
          "cache_ttl_s": 3600, "cache_expires_at": now - 1500 + 3600, "rewrite_usd": 0.04,
          "today_usd": 0.80, "source": "transcript", "match": "pid"},
@@ -652,11 +687,11 @@ def demo_view(now=None):
     limits = {"five_hour": {"pct": 22.0, "resets_at": now + 3600},
               "seven_day": {"pct": 47.0, "resets_at": now + 2 * 86400}}
     accounts = [
-        {"key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 13.20, "sessions": 2,
+        {"id": "000000000001", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 13.20, "sessions": 2,
          "five_hour": {"pct": 12.0, "resets_at": now + 3600, "window_usd": 18.0, "eta": None},
          "seven_day": {"pct": 51.0, "resets_at": now + 2 * 86400, "window_usd": 1535.0, "eta": None,
                        "projected_pct": 78.0}},
-        {"key": "team", "label": "Team", "plan": "Team", "today_usd": 3.10, "sessions": 1,
+        {"id": "000000000002", "key": "team", "label": "Team", "plan": "Team", "today_usd": 3.10, "sessions": 1,
          "five_hour": {"pct": 3.0, "resets_at": now + 5400, "window_usd": 4.0, "eta": None},
          "seven_day": {"pct": 20.0, "resets_at": now + 86400, "window_usd": 300.0, "eta": None,
                        "projected_pct": 35.0}},

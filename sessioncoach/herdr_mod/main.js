@@ -10,6 +10,7 @@ import {
   exec, hc, readTextFile, writeTextFile, appHome, checking, theme, spaces, agents, run,
   shared, setShared, notify,
 } from "herdr";
+import { buildSyncPayload, groupSessionsByAccount } from "./logic.js";
 
 const DEFAULTS = {
   command: "sessioncoach", refresh_s: 30, toasts: true, hint_min_tokens: 300000,
@@ -24,12 +25,12 @@ const LANG = {
   es: {
     in_window: "en esta ventana", this_week: "esta semana", at_pace: "a este ritmo",
     today: "Hoy", sessions: "sesiones", recent: "Alertas recientes", none: "No hay ninguna sesión de Claude Code en marcha",
-    groups: "Grupos", today_hdr: "hoy", week_hdr: "semana", compact: "⚠ /compact o /handoff",
+    other: "Otras sesiones", groups: "Grupos", today_hdr: "hoy", week_hdr: "semana", compact: "⚠ /compact o /handoff",
   },
   en: {
     in_window: "in this window", this_week: "this week", at_pace: "at this pace",
     today: "Today", sessions: "sessions", recent: "Recent alerts", none: "No Claude Code session running",
-    groups: "Groups", today_hdr: "today", week_hdr: "week", compact: "⚠ /compact or /handoff",
+    other: "Other sessions", groups: "Groups", today_hdr: "today", week_hdr: "week", compact: "⚠ /compact or /handoff",
   },
 };
 
@@ -74,17 +75,17 @@ function pctColor(t, pct) {
 export default class SessionCoach extends View {
   init(_props, cx) {
     this.cfg = { ...DEFAULTS };
-    this.view = null;          // last good `live --json` document
-    this.error = null;         // one-line error, shown above the last good data
-    this.syncError = null;     // one-line error from the group sync, or null when it is fine
-    this.lastSyncJson = null;  // the last sync-herdr payload this copy sent
-    this.cursor = null;        // in memory only, never in shared
-    this.firstPoll = true;     // the first poll after this start lists the backlog and toasts nothing
-    this.events = [];          // events received, in memory, oldest first
-    this.sessionLink = {};     // session_id -> { address, space }
-    this.addrPid = new Map();  // agent address -> foreground pid
-    this.addrCwd = new Map();  // agent address -> foreground cwd
-    this.addrSpace = new Map();// agent address -> space id
+    this.view = null;             // last good `live --json` document
+    this.error = null;            // one-line error, shown above the last good data
+    this.syncError = null;        // one-line error from the group sync, or null when it is fine
+    this.lastAppliedJson = null;  // the last payload the CLI applied successfully (exit 0)
+    this.cursor = null;           // in memory only, never in shared
+    this.firstPoll = true;        // the first poll after this start lists the backlog and toasts nothing
+    this.events = [];             // events received, in memory, oldest first
+    this.sessionLink = {};        // session_id -> { address, space }
+    this.addrPid = new Map();     // agent address -> foreground pid
+    this.addrCwd = new Map();     // agent address -> foreground cwd
+    this.addrSpace = new Map();   // agent address -> space id
     this.polling = false;
     cx.spawn(async (cx) => {
       if (checking()) return;  // herdr-app check must not run anything
@@ -192,50 +193,45 @@ export default class SessionCoach extends View {
     return data;
   }
 
-  // Feed the herdr-space-groups assignments back into sessioncoach, once per change.
-  // `exec` has no stdin, so the payload is staged in a file the CLI reads. Local spaces only.
+  // Feed the herdr-space-groups assignments back into sessioncoach. The full set is sent every time
+  // ({"groups": []} clears them); the last applied payload is remembered only after the CLI exits 0,
+  // so a failed sync is retried on the next poll. `exec` has no stdin, so the payload is staged in a
+  // file whose current contents are passed as the write's `expected` value.
   async syncGroups() {
     if (this.cfg.sync_herdr_groups === false) return;
-    const sg = shared("space-groups");
-    if (!sg || typeof sg !== "object" || !Array.isArray(sg.groups) || typeof sg.spaces !== "object") return;
-    const byId = new Map();
-    for (const g of sg.groups) if (g && typeof g === "object" && g.id != null) byId.set(String(g.id), g);
-    const folders = new Map();
-    for (const sp of spaces()) {
-      if (sp.machine) continue;  // local machine only
-      const gid = sg.spaces[sp.id];
-      if (gid == null || !sp.folder) continue;
-      const key = String(gid);
-      if (!folders.has(key)) folders.set(key, []);
-      folders.get(key).push(sp.folder);
-    }
-    const groups = [];
-    for (const [gid, g] of byId) {
-      const fs = folders.get(gid);
-      if (!fs || !fs.length) continue;
-      groups.push({ name: (g && g.name) || gid, folders: fs });
-    }
-    if (!groups.length) return;
-    const text = JSON.stringify({ groups });
-    if (text === this.lastSyncJson) return;
-    const previous = this.lastSyncJson;  // null the first time: creates the file
-    const path = appHome() + SYNC_FILE;
     try {
-      await writeTextFile(path, text, previous);
-    } catch (e) {
-      this.syncError = "group sync: cannot write " + path;
-      return;
-    }
-    this.lastSyncJson = text;
-    const command = typeof this.cfg.command === "string" && this.cfg.command ? this.cfg.command : DEFAULTS.command;
-    const args = [];
-    if (Array.isArray(this.cfg.args_prefix)) args.push(...this.cfg.args_prefix.map(String));
-    args.push("group", "sync-herdr", "--json", path);
-    try {
+      const payload = buildSyncPayload(shared("space-groups"), spaces());
+      if (payload == null) return;  // no usable shared state: nothing to do
+      const text = JSON.stringify(payload);
+      if (text === this.lastAppliedJson) return;  // already applied
+      const path = appHome() + SYNC_FILE;
+      await this.stagePayload(path, text);
+      const command = typeof this.cfg.command === "string" && this.cfg.command ? this.cfg.command : DEFAULTS.command;
+      const args = [];
+      if (Array.isArray(this.cfg.args_prefix)) args.push(...this.cfg.args_prefix.map(String));
+      args.push("group", "sync-herdr", "--json", path);
       const result = await exec(command, args, { timeout: 15000 });
-      this.syncError = result.code === 0 ? null : "group sync failed (exit " + result.code + ")";
+      if (result.code === 0) {
+        this.lastAppliedJson = text;
+        this.syncError = null;
+      } else {
+        this.syncError = "group sync failed (exit " + result.code + ")";
+      }
     } catch (e) {
       this.syncError = "group sync: " + (e && e.message ? e.message : String(e));
+    }
+  }
+
+  // Write the payload, passing the staging file's current text as `expected`; on a stale-snapshot
+  // rejection, re-read once and retry.
+  async stagePayload(path, text) {
+    let expected = null;
+    try { expected = await readTextFile(path); } catch { expected = null; }
+    try {
+      await writeTextFile(path, text, expected);
+    } catch (e) {
+      try { expected = await readTextFile(path); } catch { expected = null; }
+      await writeTextFile(path, text, expected);
     }
   }
 
@@ -300,7 +296,10 @@ export default class SessionCoach extends View {
       if (!sessions.length) {
         children.push(div().px(12).pt(10).pb(4).text_size(12).text_color(t.dim).child(this.langTable().none));
       }
-      children.push(...this.accountCards(t));
+      const activeSpace = (spaces().find((s) => s.active) || {}).id;
+      const grouped = groupSessionsByAccount(this.view.accounts, this.view.sessions);
+      for (const card of grouped.cards) children.push(this.accountCard(t, card, activeSpace));
+      if (grouped.other.length) children.push(this.otherBlock(t, grouped.other, activeSpace));
       children.push(...this.groupRows(t));
       children.push(...this.alertRows(t));
       return root.children(children);
@@ -356,39 +355,41 @@ export default class SessionCoach extends View {
       .child(div().text_size(12).text_color(t.muted).child(caption));
   }
 
-  accountCards(t) {
+  accountCard(t, card, activeSpace) {
     const L = this.langTable();
-    const accounts = Array.isArray(this.view.accounts) ? this.view.accounts : [];
+    const a = card.account;
+    const key = a.id;
     const folded = this.foldState();
-    const activeSpace = (spaces().find((s) => s.active) || {}).id;
-    return accounts.map((a) => {
-      const key = a.key != null ? String(a.key) : "";
-      const isFolded = Boolean(folded[key]);
-      const card = v_flex().id("acct-" + key).px(12).py(6);
-      card.child(
-        h_flex().gap(6).items_center().cursor_pointer().on_click(() => this.toggleFold(key))
-          .child(this.dot(t, this.accountPct(a)))
-          .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground)
-            .child((a.label || "?") + " · " + (a.plan || "")))
-          .child(div().flex_none().text_color(t.dim).child(isFolded ? "›" : "˅")),
-      );
-      if (!isFolded) {
-        card.child(this.windowRow(t, L, a.five_hour, false));
-        card.child(this.windowRow(t, L, a.seven_day, true));
-        card.child(div().pt(2).text_size(12).text_color(t.muted)
-          .child(L.today + " " + usd(a.today_usd) + " · " + (a.sessions || 0) + " " + L.sessions));
-        for (const s of this.sessionsFor(key, activeSpace)) card.child(this.sessionRow(t, s));
-      }
-      return card;
-    });
+    const isFolded = Boolean(folded[key]);
+    const out = v_flex().id("acct-" + key).px(12).py(6);
+    out.child(
+      h_flex().gap(6).items_center().cursor_pointer().on_click(() => this.toggleFold(key))
+        .child(this.dot(t, this.accountPct(a)))
+        .child(div().flex_1().min_w(0).truncate().font_medium().text_color(t.foreground)
+          .child((a.label || "?") + " · " + (a.plan || "")))
+        .child(div().flex_none().text_color(t.dim).child(isFolded ? "›" : "˅")),
+    );
+    if (!isFolded) {
+      out.child(this.windowRow(t, L, a.five_hour, false));
+      out.child(this.windowRow(t, L, a.seven_day, true));
+      out.child(div().pt(2).text_size(12).text_color(t.muted)
+        .child(L.today + " " + usd(a.today_usd) + " · " + (a.sessions || 0) + " " + L.sessions));
+      for (const s of this.orderedSessions(card.sessions, activeSpace)) out.child(this.sessionRow(t, s));
+    }
+    return out;
   }
 
-  sessionsFor(accountKey, activeSpace) {
-    const sessions = Array.isArray(this.view.sessions) ? this.view.sessions : [];
-    const mine = sessions.filter((s) => (s.account == null ? null : String(s.account)) === accountKey);
+  otherBlock(t, sessions, activeSpace) {
+    const L = this.langTable();
+    return v_flex().px(12).py(6)
+      .child(div().pt(2).pb(2).font_medium().text_color(t.dim).child(L.other))
+      .children(this.orderedSessions(sessions, activeSpace).map((s) => this.sessionRow(t, s)));
+  }
+
+  orderedSessions(list, activeSpace) {
     const active = [];
     const rest = [];
-    for (const s of mine) {
+    for (const s of list) {
       const link = this.sessionLink[s.session_id];
       if (link && link.space === activeSpace) active.push(s);
       else rest.push(s);
@@ -420,7 +421,8 @@ export default class SessionCoach extends View {
   }
 
   groupRows(t) {
-    const groups = Array.isArray(this.view.groups) ? this.view.groups : [];
+    const groups = (Array.isArray(this.view.groups) ? this.view.groups : [])
+      .filter((g) => g && typeof g === "object" && !Array.isArray(g));
     if (!groups.length) return [];
     const L = this.langTable();
     const head = h_flex().px(12).pb(2).gap(8)

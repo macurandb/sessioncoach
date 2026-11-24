@@ -405,6 +405,40 @@ class Group(CliBase):
         self.assertIn("today", out)
         self.assertIn("unassigned", out)
 
+    def test_sync_herdr_rejects_an_invalid_feed_with_exit_2(self):
+        for feed in ('{"groups": "nope"}', '{"groups": [{"name": "x", "folders": ["not-abs"]}]}', "{broken"):
+            rc, out = self.run_cli("group", "sync-herdr", "--json", "-", stdin=feed)
+            self.assertEqual(rc, 2, feed)
+            self.assertIn("sync-herdr", out)
+
+    def test_an_invalid_projects_json_refuses_with_exit_1(self):
+        path = os.path.join(self.data, "projects.json")
+        with open(path, encoding="utf-8") as fh:
+            original = fh.read()
+
+        def restore():
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(original)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        self.addCleanup(restore)
+        rc, out = self.run_cli("group", "add", "Pretty")
+        self.assertEqual(rc, 1)
+        self.assertIn("not valid JSON", out)
+
+    def test_a_held_lock_times_out_with_exit_1(self):
+        from sessioncoach import projects
+        lock = os.path.join(self.data, "projects.json.lock")
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            with mock.patch.object(projects, "LOCK_TIMEOUT_S", 0.05):
+                rc, out = self.run_cli("group", "add", "Pretty")
+            self.assertEqual(rc, 1)
+            self.assertIn("locked", out)
+        finally:
+            os.close(fd)
+            os.remove(lock)
+
 
 if __name__ == "__main__":
     unittest.main()

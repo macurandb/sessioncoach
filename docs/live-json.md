@@ -83,6 +83,7 @@ each with:
 
 ```json
 {
+  "id": "1f8ab3c9d0e2",
   "key": "personal",
   "label": "Personal · Max",
   "plan": "Max",
@@ -94,6 +95,8 @@ each with:
 }
 ```
 
+- `id` — the first 12 hex of sha256 of the account's config dir: a stable, unique identity per
+  account (two accounts are never the same `id`, even when their `key` falls back to `"unknown"`).
 - `key` — the account key: the `accounts.json` id that owns the root, else `auto:<org hash>`, else
   `"unknown"`.
 - `label` — the `accounts.json` label of that account, else a plan word from `accounts.detect`
@@ -141,6 +144,8 @@ sessions may be listed there). Each object:
 - `cwd` — the working directory from the session file.
 - `project` — the project label (`projects.Labeler`), or the `cwd` basename when there is no transcript.
 - `account` — the account key of the transcript root this session reads from (`null` with no transcript).
+- `account_id` — the account's `id`, derived from the config dir the session file came from (not
+  from the transcript), so a session with no transcript still belongs to its account.
 - `group` — the tenant (group) id, or `"unassigned"` when no rule assigns one.
 - `status` — the session's status, as written by Claude Code.
 - `model` — the model of the last turn that reported usage.

@@ -54,9 +54,25 @@ spaces only — and runs `sessioncoach group sync-herdr` with it.
 
 `sync-herdr` replaces **only** the rules with `"source": "herdr"`; rules you wrote by hand or with
 the CLI are never touched. It creates a missing group (label = name; a nested name like
-`Clients/Pretty` uses its leaf `Pretty`), skips empty or home folders, and is idempotent: the same
-input changes nothing, so the file is not rewritten. See [docs/herdr.md](herdr.md) for installing
+`Clients/Pretty` uses its leaf `Pretty`), skips the home folder, and is idempotent: the same input
+changes nothing, so the file is not rewritten. The **same leaf name** — `Clients/Pretty` and
+`Other/Pretty` — is the same client and merges into one group; two different names whose slug
+collides (`Pretty` vs `Pretty!`) get `-2`, `-3`… See [docs/herdr.md](herdr.md) for installing
 `herdr-space-groups`.
+
+`sync-herdr` validates the whole input before touching the file: `groups` must be a list (at most
+200) of objects with a `name` (non-empty, at most 100 characters) and `folders` (a list of absolute
+paths, at most 4096 characters each, at most 1000 per group). Anything else exits 2 with the file
+untouched; `{"groups": []}` is valid and removes every `source: "herdr"` rule.
+
+## How the file is written
+
+Every mutation (the CLI and the panel both write this file) goes through an exclusive lock file
+(`projects.json.lock`) so two writers never lose each other's changes, then writes atomically (temp
+file + `os.replace`). A lock left by a crashed writer for over a minute is broken; a held fresh lock
+times out with a clear error (exit 1). A `projects.json` that exists but is not a JSON object is
+never overwritten: mutations refuse with "projects.json is not valid JSON; fix or move it" (exit 1),
+while reading for display still works.
 
 ## Who uses groups
 

@@ -576,39 +576,41 @@ def cmd_group(args):
         return 1
     if args.group_cmd == "list":
         return _group_list()
-    if args.group_cmd == "add":
-        gid = projects.add_group(args.id, args.label)
-        print("group %s (%s)" % (gid, args.label))
-        return 0
-    if args.group_cmd == "assign":
-        gid = projects.assign(args.group, args.target)
-        print("assigned %s to group %s" % (args.target, gid))
-        return 0
-    if args.group_cmd == "unassign":
-        n = projects.unassign(args.target)
-        print("unassigned %s (%d rule%s)" % (args.target, n, "" if n == 1 else "s"))
-        return 0
-    if args.group_cmd == "rename":
-        gid = projects.rename_group(args.group, args.label)
-        print("group %s renamed to %s" % (gid, args.label))
-        return 0
-    if args.group_cmd == "remove":
-        try:
+    try:
+        if args.group_cmd == "add":
+            gid = projects.add_group(args.id, args.label)
+            print("group %s (%s)" % (gid, args.label))
+        elif args.group_cmd == "assign":
+            gid = projects.assign(args.group, args.target)
+            print("assigned %s to group %s" % (args.target, gid))
+        elif args.group_cmd == "unassign":
+            n = projects.unassign(args.target)
+            print("unassigned %s (%d rule%s)" % (args.target, n, "" if n == 1 else "s"))
+        elif args.group_cmd == "rename":
+            gid = projects.rename_group(args.group, args.label)
+            print("group %s renamed to %s" % (gid, args.label))
+        elif args.group_cmd == "remove":
             gid = projects.remove_group(args.group, force=args.force)
-        except ValueError as e:
-            print("sessioncoach group remove: %s" % e)
-            return 1
-        print("removed group %s" % gid)
-        return 0
-    if args.group_cmd == "sync-herdr":
-        if args.json == "-":
-            mapping = json.load(sys.stdin)
+            print("removed group %s" % gid)
+        elif args.group_cmd == "sync-herdr":
+            if args.json == "-":
+                mapping = json.load(sys.stdin)
+            else:
+                with open(args.json, encoding="utf-8") as fh:
+                    mapping = json.load(fh)
+            print(projects.sync_herdr(mapping))
         else:
-            with open(args.json, encoding="utf-8") as fh:
-                mapping = json.load(fh)
-        print(projects.sync_herdr(mapping))
-        return 0
-    return 2
+            return 2
+    except projects.SyncError as e:
+        print("sessioncoach group sync-herdr: %s" % e)
+        return 2
+    except projects.ProjectsError as e:
+        print("sessioncoach group: %s" % e)
+        return 1
+    except ValueError as e:  # a sync-herdr file that is not even JSON
+        print("sessioncoach group sync-herdr: %s" % e)
+        return 2
+    return 0
 
 
 def _group_list():

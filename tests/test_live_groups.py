@@ -274,5 +274,125 @@ class View(Base):
         self.assertEqual(v["groups"], [])
 
 
+class Identity(Base):
+    def test_account_ids_are_unique_stable_12_hex(self):
+        con = self.connect()
+        self.sample(con, self.ra, five_pct=10.0, five_reset=NOW + 3600)
+        self.sample(con, self.rb, five_pct=20.0, five_reset=NOW + 3600)
+        con.commit()
+        ids = [a["id"] for a in self.view()["accounts"]]
+        self.assertEqual(len(set(ids)), 2)  # two roots -> two unique ids
+        self.assertTrue(all(len(i) == 12 and all(c in "0123456789abcdef" for c in i) for i in ids))
+
+    def test_session_account_id_comes_from_the_config_dir_not_the_transcript(self):
+        self.write_accounts({"personal": {"label": "P", "roots": [self.ra]}})
+        cfg = os.path.dirname(self.ra)
+        with open(os.path.join(cfg, "sessions", "1001.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1001, "sessionId": "sid-x", "cwd": "/Users/x/code"}, fh)
+        s = {x["session_id"]: x for x in self.view()["sessions"]}["sid-x"]  # no transcript at all
+        self.assertEqual(s["account_id"], live._identity(cfg))
+        self.assertIsNone(s["account"])  # no transcript -> no root -> no account name
+
+    def test_session_account_id_matches_the_account_card(self):
+        self.write_accounts({"personal": {"label": "P", "roots": [self.ra]}})
+        self.write_projects({"rules": [{"match": "-shop", "project": "shop", "tenant": "pretty"}]})
+        cfg = os.path.dirname(self.ra)
+        with open(os.path.join(cfg, "sessions", "1001.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1001, "sessionId": "sid-a", "cwd": "/Users/x/code/shop"}, fh)
+        os.makedirs(os.path.join(self.ra, "-shop"))
+        with open(os.path.join(self.ra, "-shop", "sid-a.jsonl"), "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "assistant", "timestamp": iso(NOW - 60),
+                                 "message": {"model": "claude-opus-5-5",
+                                             "usage": {"input_tokens": 10, "cache_read_input_tokens": 0,
+                                                       "cache_creation_input_tokens": 0}}}) + "\n")
+        con = self.connect()
+        self.sample(con, self.ra, five_pct=10.0, five_reset=NOW + 3600)
+        con.commit()
+        v = self.view()
+        a = v["accounts"][0]
+        s = {x["session_id"]: x for x in v["sessions"]}["sid-a"]
+        self.assertEqual(a["id"], live._identity(cfg))
+        self.assertEqual(s["account_id"], a["id"])
+
+
+class Eta(Base):
+    def rising(self, con, root, reset, lo, hi):
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) VALUES (?,?,?,?,?)",
+                    (NOW - lo, None, root, 20.0, reset))
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) VALUES (?,?,?,?,?)",
+                    (NOW - hi, None, root, 50.0, reset))
+
+    def test_adding_root_b_does_not_change_root_as_eta(self):
+        self.write_accounts({"a": {"label": "A", "roots": [self.ra]}, "b": {"label": "B", "roots": [self.rb]}})
+        con = self.connect()
+        reset = NOW + 3600
+        self.rising(con, self.ra, reset, 1200, 120)
+        con.commit()
+        ra_id = live._identity(os.path.dirname(os.path.normpath(self.ra)))
+        eta_a = {a["id"]: a for a in self.view()["accounts"]}[ra_id]["five_hour"]["eta"]
+        self.assertIsNotNone(eta_a)
+        # root B shares the reset time but moves at a different pace: it must not shift A's eta
+        self.rising(con, self.rb, reset, 1200, 120)
+        con.commit()
+        self.assertEqual({a["id"]: a for a in self.view()["accounts"]}[ra_id]["five_hour"]["eta"], eta_a)
+
+    def test_samples_before_the_login_are_ignored_by_pace(self):
+        self.write_accounts({"a": {"label": "A", "roots": [self.ra]}})
+        con = self.connect()
+        switch = NOW - 1800
+        con.execute("INSERT INTO accounts_seen (root, seen_at, org_hash, org_type) VALUES (?,?,?,?)",
+                    (self.ra, dt.datetime.fromtimestamp(switch, dt.timezone.utc).isoformat(), "x", "claude_team"))
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) VALUES (?,?,?,?,?)",
+                    (NOW - 3600, None, self.ra, 10.0, NOW + 3600))  # before the login
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) VALUES (?,?,?,?,?)",
+                    (NOW - 120, None, self.ra, 50.0, NOW + 3600))   # after the login
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertIsNone(a["five_hour"]["eta"])  # the pre-login baseline must not seed the pace
+
+
+class WindowBoundaries(Base):
+    def test_exact_upper_and_lower_bounds(self):
+        self.write_accounts({"personal": {"label": "P", "roots": [self.ra]}})
+        con = self.connect()
+        five_reset = NOW + 3600
+        self.sample(con, self.ra, five_pct=10.0, five_reset=five_reset)
+        start = five_reset - 5 * 3600
+        self.request(con, self.ra, start)    # exactly at the window start -> included
+        self.request(con, self.ra, NOW)      # exactly at now -> included
+        self.request(con, self.ra, NOW + 1)  # one second after now -> excluded
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertAlmostEqual(a["five_hour"]["window_usd"], 2.0, places=2)  # start + now, not now + 1
+
+
+class Aggregation(Base):
+    def test_window_rows_equal_the_per_row_weight(self):
+        import random
+
+        from sessioncoach import pricing
+        con = self.connect()
+        rng = random.Random(1)
+        models = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+        rows = []
+        for i in range(120):
+            model = rng.choice(models)
+            split = rng.choice([True, False])
+            row = {"project_dir": "-p%d" % (i % 3), "root": self.ra, "model": model,
+                   "input": rng.randint(0, 200000), "output": rng.randint(0, 5000),
+                   "cache_read": rng.randint(0, 200000), "cache_write": rng.randint(0, 200000),
+                   "cache_write_5m": rng.randint(0, 8000) if split else None,
+                   "cache_write_1h": rng.randint(0, 8000) if split else None}
+            ts = NOW - rng.randint(0, 3600)
+            store.add_request(con, dict(row, file="f", msg_id="m%d" % i, request_id="r%d" % i,
+                                        session_id="s", kind="main", ts=iso(ts)))
+            rows.append((ts, row))
+        con.commit()
+        start = NOW - 3600
+        agg_total = sum(w for _r, _p, w in live._window_rows(con, start, NOW, root=self.ra))
+        per = sum(pricing.weight(r["model"], r) for ts, r in rows if start <= ts <= NOW)
+        self.assertAlmostEqual(agg_total, per, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

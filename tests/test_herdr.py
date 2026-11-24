@@ -23,7 +23,7 @@ from sessioncoach import cli, herdr, installer, live, paths
 
 SESSION_KEYS = {"pid", "session_id", "cwd", "project", "status", "model", "context_tokens",
                 "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "today_usd",
-                "source", "match", "account", "group"}
+                "source", "match", "account", "account_id", "group"}
 VIEW_KEYS = {"version", "now", "lang", "limits", "sessions", "accounts", "groups", "events", "cursor"}
 
 
