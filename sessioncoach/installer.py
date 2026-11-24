@@ -23,6 +23,7 @@ from . import (
     analysis,
     config,
     handoff,
+    harnesses,
     hooks,
     idlecompact,
     idleguard,
@@ -740,6 +741,33 @@ def check(cwd=None, agents_dir=None, now=None, load_fn=launchd_loaded, mac=None)
     if value is None and idleguard.enabled(alerts):
         items.append((OK, "idle summary threshold", "not set: Claude Code's default, %dk — whether %dk pays off for you: "
                       "sessioncoach idle-compact" % (idlecompact.DEFAULT_MIN_TOKENS // 1000, idlecompact.FLOOR_MIN_TOKENS // 1000)))
+    # other coding harnesses (OpenCode ...): found data; ok only once it has been read without error
+    status = {}
+    if os.path.exists(paths.db_path()):
+        try:
+            con = store.open_readonly(paths.db_path())
+            try:
+                status = {r["harness"]: r for r in con.execute(
+                    "SELECT harness, path, last_ok, last_error FROM harness_status")}
+            finally:
+                con.close()
+        except sqlite3.Error:  # no harness_status table, or the db is unreadable: treated as "not read yet"
+            pass
+    for adapter in harnesses.ADAPTERS:
+        try:
+            path = adapter.detect()
+        except Exception:
+            path = None
+        if not path:
+            continue
+        name = "harness %s" % adapter.NAME
+        row = status.get(adapter.NAME)
+        if row and row["path"] == path and row["last_ok"] and not row["last_error"]:
+            items.append((OK, name, path))
+        elif row and row["last_error"]:
+            items.append((WARN, name, row["last_error"]))
+        else:
+            items.append((WARN, name, "found, not read yet — run sessioncoach ingest"))
     # permissions
     d = paths.data_dir()
     if os.path.isdir(d) and paths.is_windows():

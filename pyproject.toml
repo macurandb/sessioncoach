@@ -40,7 +40,7 @@ Changelog = "https://github.com/macurandb/sessioncoach/blob/main/CHANGELOG.md"
 sessioncoach = "sessioncoach.cli:main"
 
 [tool.setuptools]
-packages = ["sessioncoach"]
+packages = ["sessioncoach", "sessioncoach.harnesses"]
 
 [tool.setuptools.package-data]
 sessioncoach = ["web/*.html"]
