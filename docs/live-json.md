@@ -137,10 +137,13 @@ The max event `id` returned (or the `--since` value when nothing is new). Pass i
 # first call: everything running and the last 24 h of alerts
 sessioncoach live --json > live.json
 
-# `cursor` is null until the first event arrives, so only pass --since once it is numeric
+# `cursor` is null until the first event arrives. Pass --since once it is numeric; while it is
+# still null, keep polling without --since so the first event is not missed.
 cursor=$(python -c "import json;c=json.load(open('live.json'))['cursor'];print(c if isinstance(c,int) else '')")
 if [ -n "$cursor" ]; then
   sessioncoach live --json --since "$cursor" > live.json
+else
+  sessioncoach live --json > live.json
 fi
 ```
 

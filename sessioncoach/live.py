@@ -52,6 +52,7 @@ MAX_EVENTS = 50
 PS_TIMEOUT_S = 2  # how long `ps` may take to answer the process-start check
 DB_TIMEOUT_S = 1  # how long `live` waits on a busy/locked metrics.db before degrading
 _MAX_PID = 2 ** 31 - 1  # os.kill rejects anything larger; also never 0 or negative
+_MAX_TOKENS = 10 ** 12  # token counts above this are invalid (nothing real is that large)
 # A session id is only used in a glob after this: no `*`, `?`, `[` or `../` can reach the shell.
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
@@ -140,11 +141,12 @@ def _epoch(ts):
 
 
 def _num(v):
-    """A token count as a non-negative int; bool, text, NaN/inf and negatives are 0."""
+    """A token count as a non-negative int; bool, text, NaN/inf, negatives and absurd values
+    (over 1e12, which would overflow the cost arithmetic) are 0."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return 0
     try:
-        return int(v) if math.isfinite(v) and v >= 0 else 0
+        return int(v) if math.isfinite(v) and 0 <= v <= _MAX_TOKENS else 0
     except (OverflowError, ValueError):
         return 0
 
@@ -155,7 +157,7 @@ def _int_or_none(v):
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     try:
-        return int(v) if math.isfinite(v) and v >= 0 else None
+        return int(v) if math.isfinite(v) and 0 <= v <= _MAX_TOKENS else None
     except (OverflowError, ValueError):
         return None
 
@@ -193,7 +195,7 @@ def _tail_info(path):
             continue
         try:
             d = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if not isinstance(d, dict) or d.get("type") != "assistant":
             continue
@@ -261,7 +263,7 @@ def _live_sessions(con=None):
             try:
                 with open(path, encoding="utf-8") as fh:
                     d = json.load(fh)
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 continue
             if not isinstance(d, dict):
                 continue
@@ -358,19 +360,23 @@ def view(now=None, since=None, con=None):
 
     `now` (epoch seconds) and `since` (a previous `cursor`) pin the output; `con` is an optional
     read-only metrics connection — when omitted, metrics.db is opened read-only if it exists. If
-    metrics.db cannot be opened or queried (locked, corrupt), the output degrades to transcript-
-    only: `today_usd` and `limits` null, `events` empty and `cursor` = `since`."""
+    metrics.db cannot be opened or any metrics query fails (locked, corrupt), the output degrades
+    to exactly the transcript-only view: `today_usd` and `limits` null, `events` empty and
+    `cursor` = `since`. A connection `live` opens itself is always closed; a caller-provided
+    `con` is never closed."""
     now = int(now if now is not None else time.time())
-    own = con is None
     limits = None
     events, cursor = [], since
     sessions = None
+    owned = None  # the connection `live` opened, kept separate so `finally` always closes it
     try:
         if con is None and os.path.exists(paths.db_path()):
             try:
-                con = store.open_readonly(paths.db_path(), timeout=DB_TIMEOUT_S)
+                owned = store.open_readonly(paths.db_path(), timeout=DB_TIMEOUT_S)
             except sqlite3.Error:
-                con = None
+                owned = None
+        if con is None:
+            con = owned
         tables = set()
         if con is not None:
             try:
@@ -389,10 +395,13 @@ def view(now=None, since=None, con=None):
                 if "alert_events" in tables:
                     events, cursor = _events(con, since, now, config.notice_lang(config.load_alerts()))
             except sqlite3.Error:
+                # any metrics query failing must degrade to the transcript-only view: rebuild
+                # without metrics (today_usd null, no fallback fields, source per transcript only)
                 limits, events, cursor = None, [], since
+                sessions = _live_sessions(None)
     finally:
-        if own and con is not None:
-            con.close()
+        if owned is not None:
+            owned.close()
     if sessions is None:  # an unexpected error in the metrics pass: transcript-only fallback
         sessions = _live_sessions(None)
     sid_proj = {s["session_id"]: s["project"] for s in sessions if s.get("project")}

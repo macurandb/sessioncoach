@@ -315,6 +315,45 @@ class Live(unittest.TestCase):
         self.assertTrue(all(s["today_usd"] is None for s in v["sessions"]))
         self.assertTrue(any(s["model"] for s in v["sessions"]))
 
+    def test_query_failure_degrades_to_transcript_only(self):
+        con = store.connect(self.db)
+        try:
+            con.execute("INSERT INTO cost_slices (day, project_dir, session_id, model, usd, estimated) "
+                        "VALUES (?,?,?,?,?,?)", (dt.date.fromtimestamp(NOW).isoformat(), "-Users-x-code-shop",
+                                                 "sid-a", "opus-5-5", 12.40, 0))
+            # an incompatible alert_events table (no `ts`) makes _events' query fail
+            con.execute("DROP TABLE alert_events")
+            con.execute("CREATE TABLE alert_events (source TEXT)")
+            con.commit()
+        finally:
+            con.close()
+        v = self.view()
+        self.assertIsNone(v["limits"])
+        self.assertEqual(v["events"], [])
+        self.assertEqual(v["cursor"], None)
+        self.assertTrue(all(s["today_usd"] is None for s in v["sessions"]))  # today_usd cleared too
+        self.assertTrue(all(s["source"] in ("transcript", None) for s in v["sessions"]))
+
+    def test_owned_connection_closed_after_lock(self):
+        c = sqlite3.connect(self.db)
+        c.execute("CREATE TABLE requests (ts TEXT)")
+        c.commit()
+        c.execute("BEGIN EXCLUSIVE")
+        self.addCleanup(c.close)
+        opened = {}
+        real_open_readonly = store.open_readonly
+
+        def _open(path, timeout=None):
+            con = real_open_readonly(path, timeout=timeout)
+            opened["con"] = con
+            return con
+
+        with mock.patch("sessioncoach.store.open_readonly", side_effect=_open):
+            self.view()
+        self.assertIn("con", opened)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            opened["con"].execute("SELECT 1")  # the connection `live` opened is closed
+
     def test_invalid_pids_are_skipped(self):
         for i, val in enumerate((0, -1, True, 10 ** 100, "123")):
             with open(os.path.join(self.sessions_dir, "400%d.json" % i), "w") as fh:
@@ -593,6 +632,28 @@ class Helpers(unittest.TestCase):
         info = live._tail_info(path)
         self.assertIsNone(info["model"])  # > 100 chars -> None
         self.assertEqual(info["context"], 40)  # "500" and True count as 0
+        self.assertEqual(info["ttl"], 3600)
+
+    def test_deeply_nested_record_does_not_abort(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s.jsonl")
+        deep = '{"usage":' * 10000 + '0' + '}' * 10000  # json.loads hits the recursion limit
+        with open(path, "w") as fh:
+            fh.write(deep + "\n")
+        self.assertIsNone(live._tail_info(path))
+
+    def test_huge_tokens_do_not_overflow(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s.jsonl")
+        with open(path, "w") as fh:
+            fh.write(json.dumps({"type": "assistant", "timestamp": iso(NOW - 10),
+                                 "message": {"model": "claude-opus-5-5",
+                                             "usage": {"input_tokens": 1e308, "cache_read_input_tokens": 1e308,
+                                                       "cache_creation_input_tokens": 1e308}}}) + "\n")
+        info = live._tail_info(path)
+        self.assertEqual(info["context"], 0)  # 1e308 > 1e12 is invalid -> 0, nothing overflows
         self.assertEqual(info["ttl"], 3600)
 
     def test_today_usd_no_session(self):
