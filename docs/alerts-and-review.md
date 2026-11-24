@@ -12,6 +12,9 @@ size in tokens (`context_tokens`) does reach those sessions, from the prompt hoo
 during the turn, and a session gets it once whichever fires first. You then get:
 
 - `5h 42% ↻18:37 · 7d 61% ↻Sat 03:57 · ctx 12%` in the status line, yellow at 75 %, red at 90 %;
+- past the lowest context alert (`context_tokens`, 300k by default, or `context`, 85 %), the status line also says
+  what to do: `ctx 350k · ⚠ /compact o /handoff`. It reaches terminals where desktop notifications do not (herdr,
+  ssh, a Mac in Do Not Disturb). `"statusline_hint": false` in `alerts.json` turns it off;
 - a desktop notification (macOS, Linux, Windows) when a threshold is crossed, once per window, or when the current
   pace would exhaust a window before it resets;
 - budgets in API-equivalent USD per day or month, for everything, a workspace, a project or an account, checked on
