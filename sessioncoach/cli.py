@@ -24,6 +24,13 @@ def cmd_ingest(args):
     if args.import_jsonl:
         imp = collect.import_jsonl(con, args.import_jsonl)
         added = {k: added[k] + imp[k] for k in added}
+    try:  # other coding harnesses (OpenCode ...); their ingest must never fail this one
+        from . import harnesses
+        harness = harnesses.ingest(con)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        harness = {}
     cost.rebuild_slices(con)
     from . import limits
     limits.evaluate_budgets(con)
@@ -42,8 +49,8 @@ def cmd_ingest(args):
     counts = {t: con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0] for t in ("requests", "cost_state", "subagents", "tool_calls")}
     store.checkpoint(con)
     # scheduled runs append this line to ingest.log: "at" says when each one ran
-    print(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "db": paths.db_path(), "added": added, "total": counts,
-                      "files": stats}))
+    print(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "db": paths.db_path(), "added": added, "harness": harness,
+                      "total": counts, "files": stats}))
 
 
 def _no_db():
@@ -158,6 +165,76 @@ def cmd_live(args):
                 parts.append("%s %.0f%%%s" % (label, w["pct"], " resets " + reset if reset else ""))
         if parts:
             print("  limits: " + " · ".join(parts))
+CODE_MODE_TITLES = {"code_mode": "Code Mode", "without": "without (same days)", "before": "before Code Mode"}
+
+
+def _code_mode_row(label, g):
+    def num(v, fmt):
+        return fmt % v if v is not None else "-"
+    return "  %-30s %8d %8d %7d %9s %9s %12s %8s %6d" % (
+        label, g["sessions"], g["requests"], g["tools"], num(g["tools_per_request"], "%.2f"), num(g["usd_per_tool"], "%.3f"),
+        num(g["cache_read_per_tool"] and g["cache_read_per_tool"] / 1000, "%.0fk"), num(g["output_per_request"], "%.0f"),
+        g["repl"])
+
+
+def cmd_codemode(args):
+    import datetime as dt
+    since = dt.date.fromisoformat(args.since) if args.since else None
+    if args.days < 1 or (since and since > dt.date.today()):
+        print("codemode: --days must be 1 or more and --since not after today", file=sys.stderr)
+        return 2
+    if _no_db():
+        return 1
+    con = store.connect(paths.db_path())
+    v = analysis.code_mode_view(con, days=args.days, since=since,
+                                project=args.project, model=args.model)
+    b, a = v["before"], v["after"]
+    print("sessioncoach codemode — %s   before: %s → %s%s" % (
+        "Code Mode since %s → %s" % (a["start"], a["end"]) if a else "no Code Mode session yet (no REPL call)",
+        b["start"], b["end"], "   project ~ " + args.project if args.project else ""))
+    head = "  %-30s %8s %8s %7s %9s %9s %12s %8s %6s" % ("group", "sessions", "requests", "tools", "tools/req", "$/tool",
+                                                         "ctx read/tool", "out/req", "REPL")
+    print("\n" + head)
+    for g in v["groups"]:
+        print(_code_mode_row(CODE_MODE_TITLES[g["group"]], g) + ("" if g["enough"] else "   not enough data"))
+    print("\n  median $/tool per session: " + "   ".join(
+        "%s %s" % (CODE_MODE_TITLES[g["group"]], "%.3f" % g["median_usd_per_tool"] if g["median_usd_per_tool"] is not None
+                   else "-") for g in v["groups"]))
+    print("\n  by context size per request (a young session re-reads less in any mode: compare inside one size)")
+    print(head)
+    for bucket in v["buckets"]:
+        for g in bucket["groups"]:
+            if g["requests"]:
+                print(_code_mode_row("%s %s" % (bucket["bucket"], CODE_MODE_TITLES[g["group"]]), g))
+    print("\n  $ = list price, API equivalent. Tools run inside a REPL block count as tools; REPL and Poll do not.")
+    print("  Main sessions only: subagents are not counted.")
+    print("  A fair answer needs both modes on the same kind of work: alternate it (CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0 claude).")
+def cmd_harness(args):
+    if _no_db():
+        return 1
+    con = store.connect(paths.db_path())
+    v = analysis.harness_view(con, days=args.days or None)
+    w = v["window"]
+    print("sessioncoach harness — %s → %s   (numbers and names only, no prompts or output)"
+          % (w["start"] or "all", w["end"]))
+    if not v["rows"]:
+        print("  no harness data yet — run: sessioncoach ingest")
+    else:
+        print("\n  %-9s %-16s %-20s %9s %8s %10s %10s %9s %9s %9s %10s %6s" % (
+            "harness", "provider", "model", "sessions", "requests", "input", "output", "reason", "cache_r", "cache_w",
+            "cost", "err%"))
+        for r in v["rows"]:
+            cost = "-" if r["cost_usd"] is None else "%.4f" % r["cost_usd"]
+            print("  %-9s %-16s %-20s %9d %8d %10s %10s %9s %9s %9s %10s %5.1f%%" % (
+                r["harness"], (r["provider"] or "-")[:16], (r["model"] or "-")[:20],
+                r["sessions"], r["requests"], _fmt(r["input"]), _fmt(r["output"]), _fmt(r["reasoning"]),
+                _fmt(r["cache_read"]), _fmt(r["cache_write"]), cost, (r["error_rate"] or 0) * 100))
+    for s in v["status"]:
+        parts = ["last ok %s" % s["last_ok"] if s["last_ok"] else "not read yet",
+                 "%s rows" % (s["rows"] if s["rows"] is not None else 0)]
+        if s["last_error"]:
+            parts.append("last error: %s" % s["last_error"])
+        print("  %s at %s — %s" % (s["harness"], s["path"], "; ".join(parts)))
     return 0
 
 
@@ -485,6 +562,8 @@ VALUE = {
     "report": "Where your money goes and what to change first, in the terminal.",
     "day": "Catch an expensive day early: today against yesterday, per account and project.",
     "tools": "Find out whether exploration or one MCP server is eating your turns, and which tool fills your context.",
+    "codemode": "Whether Code Mode pays: tools per request and cost per tool, with it and without, at equal context size.",
+    "harness": "What the other coding agents you run cost and use, per provider and model.",
     "verify": "How far to trust the cost figures before you act on them.",
     "statusline": "The command Claude Code runs to draw the status line (statusline-install sets it up).",
     "statusline-install": "See a plan limit coming before it stops you: limits and alerts in the status line.",
@@ -614,6 +693,13 @@ def build_parser():
     tl = _add(sub, "tools")
     tl.add_argument("--days", type=int, default=30, help="window in days (0 = all)")
     tl.add_argument("--project", help="substring of the project directory")
+    cm = _add(sub, "codemode")
+    cm.add_argument("--since", help="YYYY-MM-DD Code Mode was turned on (default: the first REPL call)")
+    cm.add_argument("--days", type=int, default=14, help="days before --since to compare with (default 14)")
+    cm.add_argument("--project", help="substring of the project directory")
+    cm.add_argument("--model", help="substring of the model name, e.g. opus")
+    hn = _add(sub, "harness")
+    hn.add_argument("--days", type=int, default=30, help="window in days (0 = all)")
     _add(sub, "verify")
     sl = _add(sub, "statusline")
     sl.add_argument("--chain-file", help="shell file with the previous status line command to run first")
@@ -699,7 +785,7 @@ def main(argv=None):
     p, sub = build_parser()
     args = p.parse_args(argv)
     handlers = {"ingest": cmd_ingest, "report": cmd_report, "day": cmd_day, "alerts": cmd_alerts, "alert-log": cmd_alert_log,
-                "tools": cmd_tools, "live": cmd_live,
+                "tools": cmd_tools, "live": cmd_live, "codemode": cmd_codemode, "harness": cmd_harness,
                 "statusline": cmd_statusline, "statusline-install": cmd_statusline_install,
                 "statusline-uninstall": cmd_statusline_uninstall, "verify": cmd_verify, "hook": cmd_hook,
                 "hook-install": cmd_hook_install, "hook-uninstall": cmd_hook_uninstall, "dashboard": cmd_dashboard, "demo": cmd_demo,

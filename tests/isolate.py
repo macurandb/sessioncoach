@@ -10,6 +10,8 @@ for _k in [k for k in os.environ if k.startswith("SESSIONCOACH_")]:
     del os.environ[_k]
 os.environ["KIT_SCHEDULER"] = "none"  # not setdefault: a KIT_SCHEDULER=cron in the shell must not reach the real crontab
 os.environ.pop("XDG_CONFIG_HOME", None)
+os.environ.pop("XDG_DATA_HOME", None)  # the harness adapters probe $XDG_DATA_HOME/opencode: never the real one
+os.environ.pop("LOCALAPPDATA", None)  # the opencode2 adapter's Windows candidate; nothing else in the package reads it
 
 SCHEDULER_TOOLS = ("schtasks", "crontab", "systemctl", "launchctl")
 

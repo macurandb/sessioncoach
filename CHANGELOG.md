@@ -5,6 +5,12 @@
 - `sessioncoach live` reads the running Claude sessions (fresh from their transcripts) with their context size, cache
   lifetime and today's cost, plus the plan limits and the newest alerts, as one read-only JSON document for other
   tools (`--json`; the contract is in `docs/live-json.md`).
+- `sessioncoach harness` measures the other coding harnesses you run (OpenCode 2 first), per provider and model:
+  the same token, cache and error figures as Claude Code, read from `opencode.db` into `metrics.db` (numbers and
+  names only, never prompts or output). `sessioncoach ingest` reads them incrementally, and `sessioncoach check`
+  reports when one is found but could not be read.
+- The status line says `⚠ /compact o /handoff` once a session passes the lowest context alert, so the advice reaches
+  terminals where desktop notifications do not (herdr, ssh). `"statusline_hint": false` in `alerts.json` turns it off.
 - `sessioncoach --version` works, as `sessioncoach version` already did.
 - The dashboard server reads the body of a POST it rejects, so a Windows client gets the error instead of a reset
   connection.
@@ -19,6 +25,9 @@
   turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
   output.
 - Sessions started inside a Claude Code scratchpad count for the project that owns it, not as a project of their own.
+- `sessioncoach codemode` compares sessions with Code Mode (they call REPL) against the rest: tools per request, list
+  price per tool and context re-read per tool, overall and at equal context size per request, against the same days
+  and the days before Code Mode. Tools run inside a REPL block count; REPL and Poll do not.
 - On macOS, an alert that terminal-notifier cannot show (its notifications not allowed yet in System Settings) goes
   out through osascript instead of being lost.
 
