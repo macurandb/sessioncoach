@@ -299,6 +299,20 @@ class SyncHerdr(Base):
         herdr = [r for r in doc["rules"] if r["source"] == "herdr"]
         self.assertEqual([r["tenant"] for r in herdr], ["pretty-2", "pretty-2"])
 
+    def test_an_adopted_group_keeps_its_folders_after_a_rename(self):
+        # the QA sequence: CLI group "Pretty", sync Pretty -> /a, rename the label, sync again
+        projects.add_group("pretty", "Pretty")
+        a = os.path.join(self.tmp, "a")
+        feed = {"groups": [{"name": "Pretty", "folders": [a]}]}
+        projects.sync_herdr(feed)
+        self.assertEqual(self.doc()["groups"]["pretty"]["herdr_name"], "Pretty")
+        projects.rename_group("pretty", "Pretty GmbH")
+        projects.sync_herdr(feed)
+        doc = self.doc()
+        self.assertEqual(list(doc["groups"]), ["pretty"])  # no pretty-2
+        self.assertEqual(doc["groups"]["pretty"]["label"], "Pretty GmbH")  # the label the person chose stays
+        self.assertEqual({r["tenant"] for r in doc["rules"] if r["source"] == "herdr"}, {"pretty"})
+
     def test_feed_name_resolves_to_an_existing_group_by_label(self):
         projects.add_group("pretty", "Pretty")  # a CLI group, no herdr_name
         a = os.path.join(self.tmp, "a")

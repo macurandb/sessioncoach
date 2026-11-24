@@ -483,8 +483,8 @@ def _agg_weight(r):
 def _window_rows(con, start_epoch, now, root=None):
     """(root, project_dir, weight) for the requests with `start_epoch <= ts <= now` (one root, or
     all), summed in SQL by (root, project_dir, model, long-prompt) and priced in Python: a handful
-    of rows, never one per request. `julianday(ts)` compares at full precision so a fractional
-    future timestamp (`now + 0.5`) is excluded, and `COALESCE` treats NULL token columns as 0
+    of rows, never one per request. `julianday(ts)` compares at millisecond precision, the
+    precision of Claude Code's timestamps, so a request even 1 ms after `now` is excluded, and `COALESCE` treats NULL token columns as 0
     exactly as `pricing.weight` does, so the long-prompt tier and the sums match per-row pricing."""
     lo, hi = _iso(start_epoch), _iso(now)
     sql = ("SELECT root, project_dir, model, "

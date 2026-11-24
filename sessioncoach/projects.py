@@ -307,6 +307,12 @@ def _apply_sync(doc, mapping, plan=None):
     for gid, leaf, folders in plan:
         if gid not in groups:  # only missing groups are created: an existing label is never overwritten
             groups[gid] = {"label": leaf, "herdr_name": leaf}
+        elif isinstance(groups[gid], dict) and groups[gid].get("herdr_name") != leaf:
+            # an existing group adopted by its label: remember the feed name, so a later rename of
+            # the label does not move its folders into a new group on the next sync
+            groups[gid]["herdr_name"] = leaf
+        elif not isinstance(groups[gid], dict):
+            groups[gid] = {"label": leaf, "herdr_name": leaf}
         for folder in folders:
             if _skip_folder(folder):
                 continue
