@@ -141,6 +141,9 @@ def cmd_tools(args):
 
 def cmd_live(args):
     from . import live
+    if args.demo:
+        print(json.dumps(live.demo_view(), ensure_ascii=False))
+        return 0
     v = live.view(since=args.since)
     if args.json:
         print(json.dumps(v, ensure_ascii=False))
@@ -556,6 +559,16 @@ def cmd_demo(args):
     server.serve(port=args.port, open_browser=not args.no_open, db=db, demo=True)
 
 
+def cmd_herdr_install(args):
+    from . import herdr
+    return herdr.install(home=args.app_home, force=args.force)
+
+
+def cmd_herdr_uninstall(args):
+    from . import herdr
+    return herdr.uninstall(home=args.app_home)
+
+
 # What each command gives you, in one line: the first thing `help` and `<command> --help` say. The syntax comes after it.
 VALUE = {
     "ingest": "Keeps your history after Claude Code deletes its transcripts (30 days by default); setup schedules it.",
@@ -595,6 +608,8 @@ VALUE = {
                     "and whether it is set right.",
     "dashboard": "Cost, causes and recommendations at a glance, in your browser (local only).",
     "demo": "Try the dashboard or take screenshots without showing your own data.",
+    "herdr-install": "See your running Claude sessions in a Herdr panel: context, cache expiry and new alerts at a glance.",
+    "herdr-uninstall": "Remove the Herdr panel.",
     "version": "Which version you run, for a bug report.",
     "help": "What each command saves you, before its syntax.",
 }
@@ -653,9 +668,14 @@ DETAIL = {
                      "idle-guard-off.",
     "dashboard": "Serves http://127.0.0.1:<port> to this machine only.",
     "demo": "Writes synthetic data under <data dir>/demo and serves the dashboard on it; your own data is never read.",
+    "herdr-install": "Copies the panel's files into <app home>/mods/sessioncoach/ (default ~/.config/herdr-app) and writes "
+                     "its config.json; re-running refreshes command and hint_min_tokens and keeps your own keys. "
+                     "Undo: sessioncoach herdr-uninstall.",
+    "herdr-uninstall": "Removes the panel's files, its config.json and the manifest from <app home>/mods/sessioncoach/, "
+                       "and the folder if empty.",
     "live": "Read-only: reads the running Claude sessions from <config>/sessions and the tail of their transcripts, "
             "plus plan limits and recent alerts from metrics.db; never writes, ingests or notifies. "
-            "The JSON contract is in docs/live-json.md.",
+            "The JSON contract is in docs/live-json.md; --demo prints a synthetic view with the same contract.",
 }
 
 
@@ -717,6 +737,7 @@ def build_parser():
     lv = _add(sub, "live")
     lv.add_argument("--json", action="store_true")
     lv.add_argument("--since", type=int, default=None, help="only events with rowid > N (a previous cursor)")
+    lv.add_argument("--demo", action="store_true", help="print a synthetic view (no data read), for screenshots and trying the panel")
     rv = _add(sub, "review")
     rv.add_argument("--date", help="run date YYYY-MM-DD (default today; reviews the last active day before it)")
     rv.add_argument("--notify", action="store_true", help="send it now through the configured channels")
@@ -732,6 +753,11 @@ def build_parser():
     dm.add_argument("--no-open", action="store_true")
     dm.add_argument("--days", type=int, default=30)
     dm.add_argument("--seed", type=int, default=7)
+    hi = _add(sub, "herdr-install")
+    hi.add_argument("--app-home", metavar="DIR", help="the Herdr app folder (default $HERDR_APP_HOME, else ~/.config/herdr-app)")
+    hi.add_argument("--force", action="store_true", help="overwrite a panel that was edited or not installed by sessioncoach")
+    hu = _add(sub, "herdr-uninstall")
+    hu.add_argument("--app-home", metavar="DIR", help="the Herdr app folder (default $HERDR_APP_HOME, else ~/.config/herdr-app)")
     su = _add(sub, "setup")
     su.add_argument("--yes", action="store_true", help="accept every default, no questions")
     su.add_argument("--scope", choices=["global", "project", "company"], help="where the hook and status line go (default global)")
@@ -795,7 +821,8 @@ def main(argv=None):
                 "idle-guard-on": cmd_idle_guard_on, "idle-guard-off": cmd_idle_guard_off,
                 "idle-compact": cmd_idle_compact,
                 "handoff-install": cmd_handoff_install, "handoff-uninstall": cmd_handoff_uninstall,
-                "resume-hook-install": cmd_resume_hook_install, "resume-hook-uninstall": cmd_resume_hook_uninstall}
+                "resume-hook-install": cmd_resume_hook_install, "resume-hook-uninstall": cmd_resume_hook_uninstall,
+                "herdr-install": cmd_herdr_install, "herdr-uninstall": cmd_herdr_uninstall}
     if args.cmd == "version":
         print(__version__)
     elif args.cmd == "help":

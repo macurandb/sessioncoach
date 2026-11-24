@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `sessioncoach herdr-install` puts the running sessions (context, cache expiry and new alerts) in a
+  Herdr panel, with `herdr-uninstall` to remove it and `live --demo` for a synthetic view; see
+  docs/herdr.md.
 - `sessioncoach live` reads the running Claude sessions (fresh from their transcripts) with their context size, cache
   lifetime and today's cost, plus the plan limits and the newest alerts, as one read-only JSON document for other
   tools (`--json`; the contract is in `docs/live-json.md`).

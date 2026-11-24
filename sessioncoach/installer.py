@@ -24,6 +24,7 @@ from . import (
     config,
     handoff,
     harnesses,
+    herdr,
     hooks,
     idlecompact,
     idleguard,
@@ -741,6 +742,7 @@ def check(cwd=None, agents_dir=None, now=None, load_fn=launchd_loaded, mac=None)
     if value is None and idleguard.enabled(alerts):
         items.append((OK, "idle summary threshold", "not set: Claude Code's default, %dk — whether %dk pays off for you: "
                       "sessioncoach idle-compact" % (idlecompact.DEFAULT_MIN_TOKENS // 1000, idlecompact.FLOOR_MIN_TOKENS // 1000)))
+    items += herdr.check()  # silent when Herdr is not installed
     # other coding harnesses (OpenCode ...): found data; ok only once it has been read without error
     status = {}
     if os.path.exists(paths.db_path()):

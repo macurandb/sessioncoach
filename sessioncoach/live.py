@@ -413,3 +413,36 @@ def view(now=None, since=None, con=None):
             e["body"] = "%s — %s" % (e["body"], sid_proj[e["session_id"]])
     return {"version": VERSION, "now": now, "limits": limits, "sessions": sessions,
             "events": events, "cursor": cursor}
+
+
+def demo_view(now=None):
+    """A synthetic `view` with the same contract as `view()`, for screenshots and for trying the
+    panel without real data (`sessioncoach live --demo`). It reads nothing from disk: three neutral
+    sessions (one past 300k context, one with an expired cache), the plan limits at 22/47 and two
+    events."""
+    now = int(now if now is not None else time.time())
+    sessions = [
+        {"pid": 4242, "session_id": "demo-shop", "cwd": "/home/you/shop", "project": "shop", "status": "busy",
+         "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": now - 60,
+         "cache_ttl_s": 3600, "cache_expires_at": now - 60 + 3600, "rewrite_usd": 2.68,
+         "today_usd": 12.40, "source": "transcript", "match": "pid"},
+        {"pid": 4243, "session_id": "demo-api", "cwd": "/home/you/api", "project": "api", "status": "busy",
+         "model": "claude-sonnet-5-5", "context_tokens": 120000, "last_activity": now - 7200,
+         "cache_ttl_s": 3600, "cache_expires_at": now - 7200 + 3600, "rewrite_usd": 0.40,
+         "today_usd": 3.10, "source": "transcript", "match": "pid"},
+        {"pid": 4244, "session_id": "demo-docs", "cwd": "/home/you/docs", "project": "docs", "status": "idle",
+         "model": "claude-haiku-5-5", "context_tokens": 42000, "last_activity": now - 1500,
+         "cache_ttl_s": 3600, "cache_expires_at": now - 1500 + 3600, "rewrite_usd": 0.04,
+         "today_usd": 0.80, "source": "transcript", "match": "pid"},
+    ]
+    limits = {"five_hour": {"pct": 22.0, "resets_at": now + 3600},
+              "seven_day": {"pct": 47.0, "resets_at": now + 2 * 86400}}
+    events = [
+        {"id": 1, "ts": now - 3600, "source": "five_hour", "session_id": None, "level": "info",
+         "title": "Claude · 5 h limit at 22%", "body": "Resets at %s." % time.strftime("%H:%M", time.localtime(now + 3600))},
+        {"id": 2, "ts": now - 60, "source": "context_tokens", "session_id": "demo-shop", "level": "warning",
+         "title": "Claude · 335k tokens of context",
+         "body": "Every turn re-reads that whole context. /compact or one session per task makes the next turns much cheaper."},
+    ]
+    return {"version": VERSION, "now": now, "limits": limits, "sessions": sessions,
+            "events": events, "cursor": 2}
