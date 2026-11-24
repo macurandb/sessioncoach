@@ -20,9 +20,8 @@ import fnmatch
 import json
 import os
 import re
-import time
 
-from . import paths
+from . import paths, statefile
 from .collect import encode_dir
 
 UNASSIGNED = "unassigned"
@@ -33,7 +32,6 @@ _SLUG = re.compile(r"[^a-z0-9]+")  # a group id is a slug: lowercase letters, di
 _GLOB_CHARS = ("*", "?", "[")
 
 LOCK_TIMEOUT_S = 5  # how long a mutation waits for another writer's lock before giving up
-LOCK_STALE_S = 60  # a lock older than this was left behind by a crashed writer: break it
 
 # sync-herdr input bounds (the Herdr feed)
 MAX_GROUPS = 200
@@ -91,46 +89,19 @@ def save_doc(doc, path=None):
     paths.write_atomic(path, data, default_mode=0o600, backup=False)
 
 
-def _stale(lock):
-    """True when the lock file is older than LOCK_STALE_S (or already gone): safe to break."""
-    try:
-        return time.time() - os.stat(lock).st_mtime > LOCK_STALE_S
-    except OSError:
-        return True
-
-
-def _acquire_lock(lock):
-    """Create the exclusive lock file, retrying for LOCK_TIMEOUT_S; a stale lock is broken.
-    Returns the open fd. Raises ProjectsError when a fresh lock is still held after the timeout."""
-    deadline = time.time() + LOCK_TIMEOUT_S
-    while True:
-        try:
-            return os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            if _stale(lock):
-                with contextlib.suppress(OSError):
-                    os.remove(lock)
-                continue
-            if time.time() >= deadline:
-                raise ProjectsError("projects.json is locked; another sessioncoach command is writing it") from None
-            time.sleep(0.05)
-
-
 @contextlib.contextmanager
 def edit(path=None):
-    """Serialize a read-modify-write on projects.json with an exclusive lock file, yield the
-    document, and release the lock in `finally`. The body mutates the document and calls
-    `save_doc`; a body that raises never writes (and the lock is still released)."""
+    """Serialize a read-modify-write on projects.json and yield the document. The body mutates it and
+    calls `save_doc`; a body that raises never writes.
+
+    The lock is the operating system's (`statefile.locked`: flock, or msvcrt on Windows) on a
+    `projects.json.lock` file next to it, so a writer that dies releases it with its process and no
+    stale-lock handling is needed. Unlike the hooks' state files, a mutation never goes on without it."""
     path = path or paths.projects_map_path()
-    lock = path + ".lock"
-    fd = _acquire_lock(lock)
-    try:
+    with statefile.locked(path + ".lock", timeout=LOCK_TIMEOUT_S) as held:
+        if not held:
+            raise ProjectsError("projects.json is locked; another sessioncoach command is writing it")
         yield _read_for_edit(path)
-    finally:
-        with contextlib.suppress(OSError):
-            os.close(fd)
-        with contextlib.suppress(OSError):
-            os.remove(lock)
 
 
 def group_labels(doc=None):
@@ -292,35 +263,50 @@ def _validate_sync(mapping):
     return mapping
 
 
-def _sync_plan(mapping):
-    """[(group id, leaf label, [folders])] from a validated input: the same leaf name merges into
-    one group (one client), and two different leaves whose slug collides get `-2`, `-3`…"""
-    out, by_leaf, assigned = [], {}, set()
+def _sync_plan(mapping, groups=None):
+    """[(group id, leaf label, [folders])] from a validated input, stable across syncs. A feed
+    name resolves to an existing group by its `herdr_name` first, then its label; only a new name
+    gets a fresh slug, and existing ids are reserved (a collision gets `-2`, `-3`…). The same leaf
+    appearing twice in one feed merges into one group."""
+    groups = groups or {}
+    by_herdr = {v.get("herdr_name"): gid for gid, v in groups.items()
+                if isinstance(v, dict) and isinstance(v.get("herdr_name"), str)}
+    by_label = {v.get("label"): gid for gid, v in groups.items()
+                if isinstance(v, dict) and isinstance(v.get("label"), str)}
+    assigned = set(groups)  # existing ids are never reassigned to a different name
+    out, by_gid, seen_leaf = [], {}, {}
     for g in mapping["groups"]:
         leaf = g["name"].split("/")[-1].strip()
-        folders = g["folders"]
-        if leaf in by_leaf:
-            out[by_leaf[leaf]][2].extend(folders)
-            continue
-        base = slug(leaf) or "group"
-        gid, n = base, 2
-        while gid in assigned:
-            gid = "%s-%d" % (base, n)
-            n += 1
-        assigned.add(gid)
-        by_leaf[leaf] = len(out)
-        out.append([gid, leaf, list(folders)])
+        if leaf in seen_leaf:  # the same leaf again in this feed: same client
+            gid = seen_leaf[leaf]
+        else:
+            gid = by_herdr.get(leaf) or by_label.get(leaf)
+            if gid is None:
+                base = slug(leaf) or "group"
+                gid, n = base, 2
+                while gid in assigned:
+                    gid = "%s-%d" % (base, n)
+                    n += 1
+                assigned.add(gid)
+            seen_leaf[leaf] = gid
+        if gid in by_gid:
+            out[by_gid[gid]][2].extend(g["folders"])
+        else:
+            by_gid[gid] = len(out)
+            out.append([gid, leaf, list(g["folders"])])
     return out
 
 
-def _apply_sync(doc, mapping):
+def _apply_sync(doc, mapping, plan=None):
     """A new doc with the herdr rules replaced by `mapping`'s set; cli/manual rules and unknown keys kept."""
     new = copy.deepcopy(doc)
     groups = _groups_of(new)
+    if plan is None:
+        plan = _sync_plan(mapping, groups)
     herdr = []
-    for gid, leaf, folders in _sync_plan(mapping):
+    for gid, leaf, folders in plan:
         if gid not in groups:  # only missing groups are created: an existing label is never overwritten
-            groups[gid] = {"label": leaf}
+            groups[gid] = {"label": leaf, "herdr_name": leaf}
         for folder in folders:
             if _skip_folder(folder):
                 continue
@@ -338,13 +324,14 @@ def sync_herdr(mapping, path=None):
     document equals the current one the file is not rewritten. Returns a one-line summary."""
     _validate_sync(mapping)
     with edit(path) as doc:
-        new = _apply_sync(doc, mapping)
+        plan = _sync_plan(mapping, _groups_of(doc))
+        new = _apply_sync(doc, mapping, plan=plan)
         herdr = [r for r in new.get("rules") if isinstance(r, dict) and r.get("source") == "herdr"]
         if new == doc:
             return "herdr groups: unchanged (%d rules)" % len(herdr)
         save_doc(new, path)
         return "herdr groups: %d group%s, %d rules" % (
-            len(_sync_plan(mapping)), "" if len(_sync_plan(mapping)) == 1 else "s", len(herdr))
+            len(plan), "" if len(plan) == 1 else "s", len(herdr))
 
 
 class Labeler:

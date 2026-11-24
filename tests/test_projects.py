@@ -14,7 +14,7 @@ from unittest import mock
 
 import isolate
 
-from sessioncoach import paths, projects
+from sessioncoach import paths, projects, statefile
 from sessioncoach.collect import encode_dir
 
 
@@ -55,7 +55,8 @@ class Doc(Base):
 
     def test_save_is_atomic_and_private(self):
         projects.add_group("x", "X")
-        self.assertEqual(os.listdir(self.data), ["projects.json"])  # no .tmp, .lock or backup left behind
+        left = sorted(f for f in os.listdir(self.data) if not f.endswith(".lock"))  # the OS lock's file may stay
+        self.assertEqual(left, ["projects.json"])  # no .tmp or backup left behind
         if os.name != "nt":
             self.assertEqual(os.stat(self.path()).st_mode & 0o777, 0o600)
 
@@ -120,25 +121,20 @@ class InvalidFile(Base):
 
 
 class Lock(Base):
-    def test_a_stale_lock_is_broken(self):
-        lock = self.path() + ".lock"
-        with open(lock, "w", encoding="utf-8") as fh:
-            fh.write("held")
-        old = time.time() - 2 * projects.LOCK_STALE_S
-        os.utime(lock, (old, old))
+    def test_a_lock_file_left_behind_does_not_block(self):
+        # the lock is the OS's, held by an open descriptor: a leftover file from a dead writer is harmless
+        with open(self.path() + ".lock", "w", encoding="utf-8") as fh:
+            fh.write("left by a crashed writer")
         projects.add_group("a", "A")
         self.assertEqual(self.doc()["groups"], {"a": {"label": "A"}})
-        self.assertFalse(os.path.exists(lock))
 
-    def test_a_fresh_lock_times_out(self):
-        lock = self.path() + ".lock"
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        try:
+    def test_a_held_lock_times_out(self):
+        with statefile.locked(self.path() + ".lock", timeout=1) as held:
+            self.assertTrue(held)
             with mock.patch.object(projects, "LOCK_TIMEOUT_S", 0.05), self.assertRaises(projects.ProjectsError):
                 projects.add_group("a", "A")
-        finally:
-            os.close(fd)
-            os.remove(lock)
+        projects.add_group("a", "A")  # released with the block
+        self.assertIn("a", self.doc()["groups"])
 
     def test_concurrent_writers_both_survive(self):
         # writer B must wait for writer A's lock, then read A's result and add its own
@@ -172,7 +168,6 @@ class Lock(Base):
         with mock.patch.object(os, "replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
             projects.add_group("y", "Y")
         self.assertEqual(self.doc()["groups"], {"x": {"label": "X"}})
-
 
 class Assign(Base):
     def test_folder_becomes_two_rules_and_new_rules_go_first(self):
@@ -291,6 +286,27 @@ class SyncHerdr(Base):
         projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [a]},
                                         {"name": "Pretty!", "folders": [b]}]})
         self.assertEqual(list(self.doc()["groups"]), ["pretty", "pretty-2"])
+
+    def test_group_ids_are_stable_across_syncs(self):
+        # the QA sequence: Pretty -> /a and Pretty! -> /b, then only Pretty! -> /b
+        a = os.path.join(self.tmp, "a")
+        b = os.path.join(self.tmp, "b")
+        projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [a]}, {"name": "Pretty!", "folders": [b]}]})
+        self.assertEqual(self.doc()["groups"]["pretty-2"]["herdr_name"], "Pretty!")
+        projects.sync_herdr({"groups": [{"name": "Pretty!", "folders": [b]}]})
+        doc = self.doc()
+        self.assertEqual(doc["groups"]["pretty-2"]["label"], "Pretty!")  # /b keeps its own id
+        herdr = [r for r in doc["rules"] if r["source"] == "herdr"]
+        self.assertEqual([r["tenant"] for r in herdr], ["pretty-2", "pretty-2"])
+
+    def test_feed_name_resolves_to_an_existing_group_by_label(self):
+        projects.add_group("pretty", "Pretty")  # a CLI group, no herdr_name
+        a = os.path.join(self.tmp, "a")
+        projects.sync_herdr({"groups": [{"name": "Pretty", "folders": [a]}]})
+        doc = self.doc()
+        self.assertEqual(list(doc["groups"]), ["pretty"])  # reused, not re-created
+        herdr = [r for r in doc["rules"] if r["source"] == "herdr"]
+        self.assertEqual([r["tenant"] for r in herdr], ["pretty", "pretty"])
 
     def test_skips_the_home_folder(self):
         folder = os.path.join(self.tmp, "ok")

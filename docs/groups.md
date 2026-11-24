@@ -57,8 +57,10 @@ the CLI are never touched. It creates a missing group (label = name; a nested na
 `Clients/Pretty` uses its leaf `Pretty`), skips the home folder, and is idempotent: the same input
 changes nothing, so the file is not rewritten. The **same leaf name** — `Clients/Pretty` and
 `Other/Pretty` — is the same client and merges into one group; two different names whose slug
-collides (`Pretty` vs `Pretty!`) get `-2`, `-3`… See [docs/herdr.md](herdr.md) for installing
-`herdr-space-groups`.
+collides (`Pretty` vs `Pretty!`) get `-2`, `-3`… A group keeps its id across syncs: the leaf it
+came from is stored as `herdr_name`, and a later feed resolves a name to an existing group by that
+`herdr_name` (then by label) before minting a new slug. See [docs/herdr.md](herdr.md) for
+installing `herdr-space-groups`.
 
 `sync-herdr` validates the whole input before touching the file: `groups` must be a list (at most
 200) of objects with a `name` (non-empty, at most 100 characters) and `folders` (a list of absolute
@@ -67,10 +69,11 @@ untouched; `{"groups": []}` is valid and removes every `source: "herdr"` rule.
 
 ## How the file is written
 
-Every mutation (the CLI and the panel both write this file) goes through an exclusive lock file
-(`projects.json.lock`) so two writers never lose each other's changes, then writes atomically (temp
-file + `os.replace`). A lock left by a crashed writer for over a minute is broken; a held fresh lock
-times out with a clear error (exit 1). A `projects.json` that exists but is not a JSON object is
+Every mutation (the CLI and the panel both write this file) holds the operating system's exclusive
+lock on `projects.json.lock` (flock, or msvcrt on Windows) so two writers never lose each other's
+changes, then writes atomically (temp file + `os.replace`). A writer that dies releases the lock with
+its process, so a leftover `projects.json.lock` file blocks nothing; a lock another writer holds for
+more than 5 s makes the command stop with a clear error (exit 1). A `projects.json` that exists but is not a JSON object is
 never overwritten: mutations refuse with "projects.json is not valid JSON; fix or move it" (exit 1),
 while reading for display still works.
 

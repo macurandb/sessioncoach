@@ -427,17 +427,13 @@ class Group(CliBase):
         self.assertIn("not valid JSON", out)
 
     def test_a_held_lock_times_out_with_exit_1(self):
-        from sessioncoach import projects
-        lock = os.path.join(self.data, "projects.json.lock")
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        try:
+        from sessioncoach import projects, statefile
+        with statefile.locked(os.path.join(self.data, "projects.json.lock"), timeout=1) as held:
+            self.assertTrue(held)
             with mock.patch.object(projects, "LOCK_TIMEOUT_S", 0.05):
                 rc, out = self.run_cli("group", "add", "Pretty")
-            self.assertEqual(rc, 1)
-            self.assertIn("locked", out)
-        finally:
-            os.close(fd)
-            os.remove(lock)
+        self.assertEqual(rc, 1)
+        self.assertIn("locked", out)
 
 
 if __name__ == "__main__":

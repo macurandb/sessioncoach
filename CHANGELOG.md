@@ -4,8 +4,9 @@
 
 - `sessioncoach group` names your clients and reports each one's spend today, this week and this
   month; the Herdr panel feeds the `herdr-space-groups` assignments back with `group sync-herdr`.
-  See docs/groups.md. Its writes are serialised by an exclusive lock, a `projects.json` that is not
-  a JSON object is never overwritten, and a bad `sync-herdr` feed is rejected before any change.
+  See docs/groups.md. Its writes are serialised by an operating-system lock, a
+  `projects.json` that is not a JSON object is never overwritten, and a bad `sync-herdr` feed is
+  rejected before any change. A group keeps its id across syncs.
 - The Herdr panel is now per-account cards (plan limits, a 10-cell bar, window and today spend) with
   a groups table, in English or Spanish.
 - `sessioncoach live --json` adds `lang`, per-session `account`, `account_id` and `group`, an

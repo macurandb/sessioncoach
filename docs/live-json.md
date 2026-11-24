@@ -143,7 +143,8 @@ sessions may be listed there). Each object:
 - `session_id` — the session id, which also names its transcript (`<projects>/*/<session_id>.jsonl`).
 - `cwd` — the working directory from the session file.
 - `project` — the project label (`projects.Labeler`), or the `cwd` basename when there is no transcript.
-- `account` — the account key of the transcript root this session reads from (`null` with no transcript).
+- `account` — the account key of the account this session belongs to, derived from the config dir
+  its session file came from (so it is set even for a session with no transcript).
 - `account_id` — the account's `id`, derived from the config dir the session file came from (not
   from the transcript), so a session with no transcript still belongs to its account.
 - `group` — the tenant (group) id, or `"unassigned"` when no rule assigns one.

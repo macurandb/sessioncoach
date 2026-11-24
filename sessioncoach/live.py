@@ -304,6 +304,8 @@ def _live_sessions(con=None, labeler=None):
             tpath = _find_transcript(sid, roots, preferred_root=os.path.join(cfg, "projects"), cwd=cwd) if sid else None
             pdir = os.path.basename(os.path.dirname(tpath)) if tpath else None
             root = _root_of(tpath, roots) if tpath else None
+            if root is None:  # no transcript: the account is still the one this config dir belongs to
+                root = os.path.normpath(os.path.join(cfg, "projects"))
             if pdir:
                 proj, tenant = labeler(pdir)
             else:
@@ -481,17 +483,20 @@ def _agg_weight(r):
 def _window_rows(con, start_epoch, now, root=None):
     """(root, project_dir, weight) for the requests with `start_epoch <= ts <= now` (one root, or
     all), summed in SQL by (root, project_dir, model, long-prompt) and priced in Python: a handful
-    of rows, never one per request. The cache-write columns follow `pricing._cache_writes` in SQL,
-    so rows without the 1 h / 5 min split still count as 1 h writes."""
-    lo, hi = _iso(start_epoch), _iso(now + 1)
+    of rows, never one per request. `julianday(ts)` compares at full precision so a fractional
+    future timestamp (`now + 0.5`) is excluded, and `COALESCE` treats NULL token columns as 0
+    exactly as `pricing.weight` does, so the long-prompt tier and the sums match per-row pricing."""
+    lo, hi = _iso(start_epoch), _iso(now)
     sql = ("SELECT root, project_dir, model, "
-           "CASE WHEN input + cache_read + cache_write > ? THEN 1 ELSE 0 END AS long, "
-           "SUM(input) AS input, SUM(output) AS output, SUM(cache_read) AS cache_read, "
+           "CASE WHEN COALESCE(input, 0) + COALESCE(cache_read, 0) + COALESCE(cache_write, 0) > ? "
+           "THEN 1 ELSE 0 END AS long, "
+           "SUM(COALESCE(input, 0)) AS input, SUM(COALESCE(output, 0)) AS output, "
+           "SUM(COALESCE(cache_read, 0)) AS cache_read, "
            "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN COALESCE(cache_write, 0) "
            "ELSE COALESCE(cache_write_1h, 0) END) AS cw1h, "
            "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN 0 "
            "ELSE COALESCE(cache_write_5m, 0) END) AS cw5 "
-           "FROM requests WHERE ts >= ? AND ts < ?")
+           "FROM requests WHERE julianday(ts) >= julianday(?) AND julianday(ts) <= julianday(?)")
     args = [pricing.LONG_PROMPT, lo, hi]
     if root is not None:
         sql += " AND root IS ?"

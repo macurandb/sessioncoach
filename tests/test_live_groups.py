@@ -291,7 +291,7 @@ class Identity(Base):
             json.dump({"pid": 1001, "sessionId": "sid-x", "cwd": "/Users/x/code"}, fh)
         s = {x["session_id"]: x for x in self.view()["sessions"]}["sid-x"]  # no transcript at all
         self.assertEqual(s["account_id"], live._identity(cfg))
-        self.assertIsNone(s["account"])  # no transcript -> no root -> no account name
+        self.assertEqual(s["account"], "personal")  # the config dir's account, even without a transcript
 
     def test_session_account_id_matches_the_account_card(self):
         self.write_accounts({"personal": {"label": "P", "roots": [self.ra]}})
@@ -313,6 +313,22 @@ class Identity(Base):
         s = {x["session_id"]: x for x in v["sessions"]}["sid-a"]
         self.assertEqual(a["id"], live._identity(cfg))
         self.assertEqual(s["account_id"], a["id"])
+
+    def test_transcriptless_session_counts_and_names_its_account(self):
+        self.write_accounts({"personal": {"label": "Personal · Max", "roots": [self.ra]}})
+        cfg = os.path.dirname(self.ra)
+        with open(os.path.join(cfg, "sessions", "1001.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1001, "sessionId": "sid-x", "cwd": "/Users/x/code"}, fh)
+        # no transcript at all: the account still owns and counts this session
+        con = self.connect()
+        self.sample(con, self.ra, five_pct=10.0, five_reset=NOW + 3600)
+        con.commit()
+        v = self.view()
+        s = {x["session_id"]: x for x in v["sessions"]}["sid-x"]
+        a = v["accounts"][0]
+        self.assertEqual(s["account"], "personal")
+        self.assertEqual(s["account_id"], a["id"])
+        self.assertEqual(a["sessions"], 1)  # the card counts the transcript-less session
 
 
 class Eta(Base):
@@ -365,6 +381,24 @@ class WindowBoundaries(Base):
         a = self.view()["accounts"][0]
         self.assertAlmostEqual(a["five_hour"]["window_usd"], 2.0, places=2)  # start + now, not now + 1
 
+    def test_fractional_future_timestamps_are_excluded(self):
+        self.write_accounts({"personal": {"label": "P", "roots": [self.ra]}})
+        con = self.connect()
+        five_reset = NOW + 3600
+        self.sample(con, self.ra, five_pct=10.0, five_reset=five_reset)
+        start = five_reset - 5 * 3600
+        self.request(con, self.ra, start)  # included
+        self.request(con, self.ra, NOW)    # included
+        for i, frac in enumerate((0.5, 1.0)):  # future fractional timestamps -> excluded
+            store.add_request(con, {"project_dir": "-a", "file": "f%d" % i, "msg_id": "m%d" % i, "request_id": "r%d" % i,
+                                    "session_id": "s", "kind": "main",
+                                    "ts": dt.datetime.fromtimestamp(NOW + frac, dt.timezone.utc).strftime(
+                                        "%Y-%m-%dT%H:%M:%S.%fZ"),
+                                    "model": "claude-opus-5-5", "input": 250000, "output": 0, "cache_read": 0,
+                                    "cache_write": 0, "cache_write_5m": 0, "cache_write_1h": 0, "root": self.ra})
+        con.commit()
+        self.assertAlmostEqual(self.view()["accounts"][0]["five_hour"]["window_usd"], 2.0, places=2)
+
 
 class Aggregation(Base):
     def test_window_rows_equal_the_per_row_weight(self):
@@ -392,6 +426,21 @@ class Aggregation(Base):
         agg_total = sum(w for _r, _p, w in live._window_rows(con, start, NOW, root=self.ra))
         per = sum(pricing.weight(r["model"], r) for ts, r in rows if start <= ts <= NOW)
         self.assertAlmostEqual(agg_total, per, places=6)
+
+    def test_null_token_columns_take_the_long_prompt_tier(self):
+        from sessioncoach import pricing
+        con = self.connect()
+        # a Haiku request past the long-prompt threshold with NULL cache columns: pricing.weight
+        # treats NULL as 0 and selects the long tier ($0.10), and the SQL aggregate must match.
+        row = {"project_dir": "-a", "root": self.ra, "model": "claude-haiku-5-5",
+               "input": 200000, "output": 0, "cache_read": None, "cache_write": None,
+               "cache_write_5m": None, "cache_write_1h": None}
+        store.add_request(con, dict(row, file="f", msg_id="m", request_id="r", session_id="s",
+                                    kind="main", ts=iso(NOW - 60)))
+        con.commit()
+        agg_total = sum(w for _r, _p, w in live._window_rows(con, NOW - 120, NOW, root=self.ra))
+        self.assertAlmostEqual(agg_total, pricing.weight(row["model"], row), places=6)
+        self.assertAlmostEqual(agg_total, 0.10, places=2)  # 200000 x $0.50 / 1e6, not the short tier
 
 
 if __name__ == "__main__":

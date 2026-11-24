@@ -14,7 +14,7 @@ export function buildSyncPayload(spaceGroups, spacesList) {
     if (g && typeof g === "object" && !Array.isArray(g) && g.id != null) byId.set(String(g.id), g);
   }
   const folders = new Map();
-  for (const sp of spacesList || []) {
+  for (const sp of Array.isArray(spacesList) ? spacesList : []) {
     if (!sp || typeof sp !== "object") continue;
     if (sp.machine) continue;  // local machine only
     const gid = spaceGroups.spaces[sp.id];
@@ -39,14 +39,14 @@ export function buildSyncPayload(spaceGroups, spacesList) {
 export function groupSessionsByAccount(accounts, sessions) {
   const cards = [];
   const byId = new Map();
-  for (const a of accounts || []) {
+  for (const a of Array.isArray(accounts) ? accounts : []) {
     if (!a || typeof a !== "object" || Array.isArray(a) || typeof a.id !== "string" || !a.id) continue;
     const card = { account: a, sessions: [] };
     cards.push(card);
     byId.set(a.id, card);
   }
   const other = [];
-  for (const s of sessions || []) {
+  for (const s of Array.isArray(sessions) ? sessions : []) {
     if (!s || typeof s !== "object" || Array.isArray(s)) continue;
     const card = typeof s.account_id === "string" ? byId.get(s.account_id) : undefined;
     if (card) card.sessions.push(s);

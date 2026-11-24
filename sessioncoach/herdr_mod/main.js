@@ -240,6 +240,7 @@ export default class SessionCoach extends View {
   linkSessions(data) {
     const links = {};
     for (const s of Array.isArray(data.sessions) ? data.sessions : []) {
+      if (!s || typeof s !== "object") continue;  // a bad session must not break the poll
       let address = null;
       for (const [a, p] of this.addrPid) if (p === s.pid) { address = a; break; }
       if (!address && typeof s.cwd === "string" && s.cwd) {
