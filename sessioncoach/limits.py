@@ -62,7 +62,8 @@ def notify(title, message):
     """Desktop notification. Never raises.
 
     Order: `notifier` from alerts.json (a command list with {title}/{message}); terminal-notifier
-    if installed (optional: clicking opens the dashboard); otherwise osascript on macOS. Runs synchronously (about 0.15 s) so
+    if installed (optional: clicking opens the dashboard); otherwise osascript on macOS. terminal-notifier
+    exits non-zero when macOS has not allowed its notifications: osascript then tries. Runs synchronously (about 0.15 s) so
     the notification is not lost when a short-lived parent process exits. Every alert is also
     appended to <data dir>/logs/alerts.log, so nothing is lost if notifications are blocked.
     """
@@ -82,10 +83,11 @@ def notify(title, message):
         # optional: clicking opens the dashboard, and a newer alert replaces the previous one
         cmd = [tn, "-title", title, "-message", message, "-group", "sessioncoach",
                "-open", cfg.get("dashboard_url", "http://127.0.0.1:8787/")]
+        if _run_notifier(cmd) or sys.platform != "darwin":
+            return
+        cmd = _osascript_cmd(title, message)  # not allowed in System Settings yet: the alert is not lost
     elif sys.platform == "darwin":
-        # text goes in as argv: inside the script AppleScript rejects non-ASCII escapes
-        cmd = ["/usr/bin/osascript", "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
-               "-e", "end run", title, message]
+        cmd = _osascript_cmd(title, message)
     elif sys.platform == "win32":
         cmd = _toast_cmd()
         env = dict(os.environ, KIT_TOAST_TITLE=title, KIT_TOAST_MESSAGE=message)
@@ -93,8 +95,22 @@ def notify(title, message):
         cmd = [_which("notify-send"), "--app-name=sessioncoach", title, message]
     else:
         return
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, env=env, check=False)
+    _run_notifier(cmd, env)
+
+
+def _run_notifier(cmd, env=None):
+    """Run a notification command; True when it exited 0. Never raises."""
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, env=env,
+                              check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _osascript_cmd(title, message):
+    """macOS notification through osascript. Text goes in as argv: inside the script AppleScript rejects non-ASCII escapes."""
+    return ["/usr/bin/osascript", "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e", "end run", title, message]
 
 
 TOAST_PS = (

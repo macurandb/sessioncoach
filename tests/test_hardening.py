@@ -45,6 +45,30 @@ class TestNotifyArgv(Tmp):
         self.assertEqual(cmd[0], "/usr/bin/osascript")
         self.assertFalse([c for c in cmd[:-2] if title in c or message in c])
 
+    def _notify_with_terminal_notifier(self, returncodes, platform="darwin"):
+        results = [subprocess.CompletedProcess([], rc) if isinstance(rc, int) else rc for rc in returncodes]
+        with mock.patch.object(limits.sys, "platform", platform), \
+                mock.patch.object(limits, "_which", return_value="/opt/homebrew/bin/terminal-notifier"), \
+                mock.patch.object(limits.subprocess, "run", side_effect=results) as run:
+            limits.notify("t", "m")
+        return [c[0][0][0] for c in run.call_args_list]
+
+    def test_terminal_notifier_that_works_is_the_only_call(self):
+        self.assertEqual(self._notify_with_terminal_notifier([0]), ["/opt/homebrew/bin/terminal-notifier"])
+
+    def test_terminal_notifier_not_allowed_falls_back_to_osascript(self):
+        # exit 3: "Notifications are not allowed for this application"
+        self.assertEqual(self._notify_with_terminal_notifier([3, 0]),
+                         ["/opt/homebrew/bin/terminal-notifier", "/usr/bin/osascript"])
+
+    def test_terminal_notifier_that_cannot_start_falls_back_to_osascript(self):
+        calls = self._notify_with_terminal_notifier([OSError("gone"), 0])
+        self.assertEqual(calls, ["/opt/homebrew/bin/terminal-notifier", "/usr/bin/osascript"])
+
+    def test_no_osascript_fallback_outside_macos(self):
+        self.assertEqual(self._notify_with_terminal_notifier([3], platform="linux"),
+                         ["/opt/homebrew/bin/terminal-notifier"])
+
 
 class TestAlreadySent(Tmp):
     def test_two_connections_do_not_collide(self):
