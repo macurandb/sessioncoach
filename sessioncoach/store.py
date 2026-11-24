@@ -132,16 +132,18 @@ def checkpoint(con):
         pass
 
 
-def open_readonly(path):
+def open_readonly(path, timeout=None):
     """Connection that cannot write. `mode=ro` alone fails on a WAL database whose -wal/-shm files are gone
-    (nobody holds it open), because it cannot create them; then a normal connection that refuses writes is used."""
+    (nobody holds it open), because it cannot create them; then a normal connection that refuses writes is used.
+    `timeout` (seconds) bounds how long a busy database is waited for; None keeps SQLite's default."""
+    kw = {} if timeout is None else {"timeout": timeout}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True)
+        con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True, **kw)
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # opening is lazy: the WAL files are touched here
     except sqlite3.OperationalError:
         if not os.path.exists(path):
             raise
-        con = sqlite3.connect(path)
+        con = sqlite3.connect(path, **kw)
         con.execute("PRAGMA query_only = ON")
     con.row_factory = sqlite3.Row
     return con
@@ -269,7 +271,7 @@ def add_alert_event(con, source, data, session_id=None, project_dir=None, ts=Non
     Numbers only, plus timestamps (`*_ts`) and the budget `name` from alerts.json; any other text is dropped."""
     import time
     nums = {k: v for k, v in (data or {}).items()
-            if isinstance(v, (int, float)) or v is None or k.endswith("_ts") or k == "name"}
+            if isinstance(v, (int, float)) or v is None or k.endswith("_ts") or k in ("name", "period")}
     con.execute("INSERT INTO alert_events (ts, source, session_id, project_dir, data) VALUES (?,?,?,?,?)",
                 (int(ts or time.time()), source, session_id, project_dir, json.dumps(nums, sort_keys=True)))
 

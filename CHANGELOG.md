@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `sessioncoach live` reads the running Claude sessions (fresh from their transcripts) with their context size, cache
+  lifetime and today's cost, plus the plan limits and the newest alerts, as one read-only JSON document for other
+  tools (`--json`; the contract is in `docs/live-json.md`).
 - `sessioncoach harness` measures the other coding harnesses you run (OpenCode 2 first), per provider and model:
   the same token, cache and error figures as Claude Code, read from `opencode.db` into `metrics.db` (numbers and
   names only, never prompts or output). `sessioncoach ingest` reads them incrementally, and `sessioncoach check`

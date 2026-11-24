@@ -139,6 +139,32 @@ def cmd_tools(args):
                                                     r["top1_share"] * 100))
 
 
+def cmd_live(args):
+    from . import live
+    v = live.view(since=args.since)
+    if args.json:
+        print(json.dumps(v, ensure_ascii=False))
+        return 0
+    print("sessioncoach live — %d running session%s" % (len(v["sessions"]), "" if len(v["sessions"]) == 1 else "s"))
+    print("  %-20s %8s %12s %8s" % ("project", "ctx", "cache left", "today $"))
+    for s in v["sessions"]:
+        ctx = _fmt(s["context_tokens"]) if s["context_tokens"] is not None else "-"
+        left = "-"
+        if s["cache_expires_at"] is not None:
+            secs = s["cache_expires_at"] - v["now"]
+            left = "expired" if secs <= 0 else "%d min" % round(secs / 60)
+        usd = "%.2f" % s["today_usd"] if s["today_usd"] is not None else "-"
+        print("  %-20s %8s %12s %8s" % ((s["project"] or "?")[:20], ctx, left, usd))
+    lim = v["limits"]
+    if lim:
+        parts = []
+        for key, label in (("five_hour", "5h"), ("seven_day", "7d")):
+            w = lim.get(key) or {}
+            if w.get("pct") is not None:
+                reset = time.strftime("%H:%M", time.localtime(w["resets_at"])) if w.get("resets_at") else ""
+                parts.append("%s %.0f%%%s" % (label, w["pct"], " resets " + reset if reset else ""))
+        if parts:
+            print("  limits: " + " · ".join(parts))
 CODE_MODE_TITLES = {"code_mode": "Code Mode", "without": "without (same days)", "before": "before Code Mode"}
 
 
@@ -548,6 +574,7 @@ VALUE = {
     "hook-uninstall": "Stop the resume warning.",
     "alerts": "How close you are to the 5-hour and weekly limits and to your budgets.",
     "alert-log": "Whether the warnings help: what each said, why, and what you did next.",
+    "live": "What your running Claude sessions need now: context, cache expiry and new alerts, as JSON for other tools.",
     "review": "One change for today from yesterday's numbers, with no tokens spent.",
     "review-install": "Get the daily review without remembering to ask for it.",
     "review-uninstall": "Stop the scheduled daily review.",
@@ -626,6 +653,9 @@ DETAIL = {
                      "idle-guard-off.",
     "dashboard": "Serves http://127.0.0.1:<port> to this machine only.",
     "demo": "Writes synthetic data under <data dir>/demo and serves the dashboard on it; your own data is never read.",
+    "live": "Read-only: reads the running Claude sessions from <config>/sessions and the tail of their transcripts, "
+            "plus plan limits and recent alerts from metrics.db; never writes, ingests or notifies. "
+            "The JSON contract is in docs/live-json.md.",
 }
 
 
@@ -684,6 +714,9 @@ def build_parser():
     al.add_argument("--test", action="store_true", help="send a test notification")
     alog = _add(sub, "alert-log")
     alog.add_argument("--days", type=int, default=7)
+    lv = _add(sub, "live")
+    lv.add_argument("--json", action="store_true")
+    lv.add_argument("--since", type=int, default=None, help="only events with rowid > N (a previous cursor)")
     rv = _add(sub, "review")
     rv.add_argument("--date", help="run date YYYY-MM-DD (default today; reviews the last active day before it)")
     rv.add_argument("--notify", action="store_true", help="send it now through the configured channels")
@@ -752,7 +785,7 @@ def main(argv=None):
     p, sub = build_parser()
     args = p.parse_args(argv)
     handlers = {"ingest": cmd_ingest, "report": cmd_report, "day": cmd_day, "alerts": cmd_alerts, "alert-log": cmd_alert_log,
-                "tools": cmd_tools, "codemode": cmd_codemode, "harness": cmd_harness,
+                "tools": cmd_tools, "live": cmd_live, "codemode": cmd_codemode, "harness": cmd_harness,
                 "statusline": cmd_statusline, "statusline-install": cmd_statusline_install,
                 "statusline-uninstall": cmd_statusline_uninstall, "verify": cmd_verify, "hook": cmd_hook,
                 "hook-install": cmd_hook_install, "hook-uninstall": cmd_hook_uninstall, "dashboard": cmd_dashboard, "demo": cmd_demo,

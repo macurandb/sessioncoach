@@ -15,7 +15,7 @@ Pauses not warned are split: `missed` (the warning failed: no ingest in the wind
 import datetime as dt
 import json
 
-from . import config, cost, expiry, limits, pricing
+from . import config, cost, expiry, limits, nudge, pricing
 from .projects import Labeler
 
 OUTCOME_WINDOW_S = 3600  # what the person did after a hook warning, looked for within this time
@@ -26,6 +26,68 @@ WARNING_FAILED = ("no_ingest", "unknown", "disabled", "notify_off")
 VERDICT = {"false_alarm": "bad", "compacted": "good", "new_session": "good", "continued": "costly", "no_response": "neutral",
            "returned_in_time": "neutral", "returned_after_expiry": "costly", "not_returned": "neutral", "pending": "pending",
            "info": "info"}
+
+# cache_expiry events carry no project label or date (only numbers + last_ts), so their title and
+# body are the expiry messages minus the project and the handoff-date hint.
+_EXPIRY = {
+    "es": {"t": "Claude · la caché caduca en ~{n} min",
+           "m": "~{k}k tokens: si vuelves después, reescribirlos costará ~${usd} (equivalente API)."},
+    "en": {"t": "Claude · cache expires in ~{n} min",
+           "m": "~{k}k tokens: coming back later re-writes them for ~${usd} (API-equivalent)."},
+}
+
+# budget period words, for the budget_m template; an event without `period` (written before it was
+# stored) gets a body without the period clause.
+_PERIOD = {"es": {"day": "el día", "month": "el mes"}, "en": {"day": "the day", "month": "the month"}}
+_BUDGET_M_NO_PERIOD = {"es": "{u} de {l} (equivalente API).", "en": "{u} of {l} (API-equivalent)."}
+
+_RESUME = {"es": {"t": "Claude · vuelta tras {m} min con la caché caducada"},
+           "en": {"t": "Claude · back after {m} min, cache expired"}}
+
+
+def describe(source, data, lang):
+    """(title, body) for an alert event, in `lang` ('es'|'en'), from the same templates the
+    desktop notifications use (`limits.MSG`, and the expiry messages for `cache_expiry`).
+    `data` is the event's stored numbers; an unknown source returns `(source, "")`."""
+    data = data or {}
+    lang = lang if lang in ("es", "en") else "en"
+    m = limits.MSG.get(lang, limits.MSG["en"])
+    if source in ("five_hour", "seven_day"):
+        w = "5 h" if source == "five_hour" else "7 d"
+        return (m["limit_t"].format(w=w, p=round(data.get("pct") or 0)),
+                m["limit_m"].format(r=limits.hhmm(data.get("reset") or 0)))
+    if source in ("five_hour_pace", "seven_day_pace"):
+        w = "5 h" if source == "five_hour_pace" else "7 d"
+        return (m["pace_t"].format(w=w),
+                m["pace_m"].format(e=limits.hhmm(data.get("eta") or 0), r=limits.hhmm(data.get("reset") or 0)))
+    if source == "context":
+        return m["ctx_t"].format(p=round(data.get("pct") or 0)), m["ctx_m"]
+    if source == "context_tokens":
+        return m["ctxtok_t"].format(k=int((data.get("context") or 0) / 1000)), m["ctxtok_m"]
+    if source == "budget":
+        used, limit = data.get("used_usd") or 0, data.get("limit_usd") or 0
+        pct = used / limit * 100 if limit else 0
+        title = m["budget_t"].format(n=data.get("name") or "", p=round(pct))
+        per = _PERIOD[lang].get(data.get("period"))
+        body = m["budget_m"].format(u="$%.0f" % used, l="$%.0f" % limit, per=per) if per \
+            else _BUDGET_M_NO_PERIOD[lang].format(u="$%.0f" % used, l="$%.0f" % limit)
+        return title, body
+    if source == "budget_projection":
+        return (m["budget_proj_t"].format(n=data.get("name") or ""),
+                m["budget_proj_m"].format(p="$%.0f" % (data.get("projected_usd") or 0),
+                                          l="$%.0f" % (data.get("limit_usd") or 0)))
+    if source == "hook":  # the resume warning the prompt hook showed (first line of nudge.MSG)
+        h = _RESUME.get(lang, _RESUME["en"])
+        mins = round((data.get("idle_s") or 0) / 60)
+        k = int((data.get("context") or 0) / 1000)
+        return h["t"].format(m=mins), nudge.MSG[lang].split("\n")[0].split(" · ", 1)[1].format(m=mins, k=k)
+    if source == "cache_expiry":
+        e = _EXPIRY.get(lang, _EXPIRY["en"])
+        n = max(1, round((data.get("remaining_s") or 0) / 60))
+        k = int((data.get("context") or 0) / 1000)
+        usd = "%.2f" % (data.get("rewrite_usd") or 0)
+        return e["t"].format(n=n), e["m"].format(k=k, usd=usd)
+    return source, ""
 
 
 def _iso(t):

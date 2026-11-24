@@ -125,6 +125,7 @@ undo it.
 | `hook-uninstall` | Stop the resume warning. |
 | `alerts` | How close you are to the 5-hour and weekly limits and to your budgets. |
 | `alert-log` | Whether the warnings help: what each said, why, and what you did next. |
+| `live` | What your running Claude sessions need now: context, cache expiry and new alerts, as JSON for other tools. |
 | `review` | One change for today from yesterday's numbers, with no tokens spent. |
 | `review-install` | Get the daily review without remembering to ask for it. |
 | `review-uninstall` | Stop the scheduled daily review. |
@@ -144,6 +145,8 @@ undo it.
 | `demo` | Try the dashboard or take screenshots without showing your own data. |
 | `version` | Which version you run, for a bug report. |
 | `help` | What each command saves you, before its syntax. |
+
+See [docs/live-json.md](docs/live-json.md) for the `live --json` contract.
 
 </details>
 

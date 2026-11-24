@@ -544,7 +544,8 @@ def evaluate_budgets(con, cfg=None, today=None, notify_fn=None, dry=False):
             if pct >= th:
                 key = "budget:%s:%s:%s" % (b.get("name"), start.isoformat(), th)
                 if not already_sent(con, key) and cfg.get("notify", True):
-                    store.add_alert_event(con, "budget", {"name": b.get("name"), "used_usd": used, "limit_usd": limit, "threshold": th})
+                    store.add_alert_event(con, "budget", {"name": b.get("name"), "used_usd": used, "limit_usd": limit,
+                                                          "threshold": th, "period": period})
                     notify_fn(msg("budget_t", n=b.get("name"), p=round(pct)),
                               msg("budget_m", u="$%.0f" % used, l="$%.0f" % limit, per=period))
                 break
