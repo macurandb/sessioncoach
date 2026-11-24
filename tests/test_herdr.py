@@ -77,7 +77,7 @@ class Install(Base):
         self.assertEqual(manifest["version"], __import__("sessioncoach").__version__)
         for name in herdr.MOD_FILES:
             self.assertEqual(manifest["files"][name], herdr._file_hash(self.mod(), name))
-        self.assertEqual(self.cfg()["command"], "/usr/bin/sessioncoach")
+        self.assertEqual(self.cfg()["command"], os.path.abspath("/usr/bin/sessioncoach"))  # a drive letter on Windows
         self.assertEqual(self.cfg()["hint_min_tokens"], 300000)
 
     def test_idempotent(self):
@@ -102,7 +102,7 @@ class Install(Base):
         with mock.patch("shutil.which", return_value="/opt/bin/sessioncoach"):
             self.assertEqual(herdr.install(), 0)
         new = self.cfg()
-        self.assertEqual(new["command"], "/opt/bin/sessioncoach")
+        self.assertEqual(new["command"], os.path.abspath("/opt/bin/sessioncoach"))
         self.assertEqual(new["refresh_s"], 15)
         self.assertIs(new["toasts"], False)
         self.assertEqual(new["args_extra"], ["--demo"])
