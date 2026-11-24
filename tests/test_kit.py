@@ -543,6 +543,31 @@ class TestLimits(Base):
         limits.record_and_alert(con, self.payload(99, reset=2_000_100_000), now=1_999_990_100, cfg=cfg)
         self.assertEqual(self.sent, [])
 
+    def ctx_payload(self, tokens, pct=20):
+        return {"session_id": "s1", "context_window": {"used_percentage": pct, "current_usage": {
+            "input_tokens": 2, "cache_read_input_tokens": tokens, "cache_creation_input_tokens": 0}}}
+
+    def test_status_hint_past_the_lowest_context_alert(self):
+        con = store.connect(self.db)
+        cfg = dict(limits.DEFAULT_ALERTS, lang="es")
+        info = limits.record_and_alert(con, self.ctx_payload(350000), now=1_999_990_000, cfg=cfg)
+        self.assertEqual(info["hint"], "⚠ /compact o /handoff")
+        self.assertTrue(limits.render(info, color=False).endswith("ctx 350k · ⚠ /compact o /handoff"))
+        self.assertIn("\033[33m⚠ /compact o /handoff", limits.render(info))
+        info = limits.record_and_alert(con, self.ctx_payload(120000), now=1_999_990_100, cfg=cfg)
+        self.assertIsNone(info["hint"])
+        self.assertNotIn("/compact", limits.render(info, color=False))
+
+    def test_status_hint_settings(self):
+        hint = limits.status_hint
+        self.assertEqual(hint(20, 350000, dict(limits.DEFAULT_ALERTS, lang="en")), "⚠ /compact or /handoff")
+        self.assertIsNone(hint(20, 350000, dict(limits.DEFAULT_ALERTS, statusline_hint=False)))
+        off = dict(limits.DEFAULT_ALERTS, context_tokens=[], context=None, lang="es")
+        self.assertIsNone(hint(99, 900000, off))
+        self.assertEqual(hint(90, None, dict(off, context=[95, 85])), "⚠ /compact o /handoff")  # the % alert alone
+        self.assertIsNone(hint(None, None, dict(limits.DEFAULT_ALERTS, lang="es")))
+        self.assertIsNone(hint(20, 350000, dict(limits.DEFAULT_ALERTS, context_tokens=[True, "x"], context=[])))
+
     def test_pace_projection_before_reset(self):
         con = store.connect(self.db)
         cfg = dict(limits.DEFAULT_ALERTS, five_hour=[], seven_day=[], context=[])

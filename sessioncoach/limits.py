@@ -34,7 +34,8 @@ MSG = {
            "ctxtok_m": "Cada turno relee todo ese contexto. /compact o una sesión nueva por tarea abaratan mucho los siguientes turnos.",
            "budget_t": "Presupuesto «{n}» al {p}%", "budget_m": "{u} de {l} (equivalente API) en {per}.",
            "budget_proj_t": "Presupuesto «{n}»: a este ritmo lo superas",
-           "budget_proj_m": "Proyección a fin de mes: {p} de {l} (equivalente API)."},
+           "budget_proj_m": "Proyección a fin de mes: {p} de {l} (equivalente API).",
+           "hint_ctx": "⚠ /compact o /handoff"},
     "en": {"limit_t": "Claude · {w} limit at {p}%", "limit_m": "Resets at {r}. See what is consuming it in the dashboard.",
            "pace_t": "Claude · at this pace you'll hit the {w} limit", "pace_m": "You'd reach 100% around {e}; it resets at {r}.",
            "ctx_t": "Claude · context at {p}%", "ctx_m": "Consider /compact or a new session for this task.",
@@ -42,7 +43,8 @@ MSG = {
            "ctxtok_m": "Every turn re-reads that whole context. /compact or one session per task makes the next turns much cheaper.",
            "budget_t": "Budget “{n}” at {p}%", "budget_m": "{u} of {l} (API-equivalent) in {per}.",
            "budget_proj_t": "Budget “{n}”: on pace to exceed it",
-           "budget_proj_m": "Month-end projection: {p} of {l} (API-equivalent)."},
+           "budget_proj_m": "Month-end projection: {p} of {l} (API-equivalent).",
+           "hint_ctx": "⚠ /compact or /handoff"},
 }
 
 
@@ -201,8 +203,28 @@ def record_and_alert(con, data, now=None, cfg=None, root=None):
                 notify(msg("ctx_t", p=round(ctx)), msg("ctx_m"))
     if ctx_tokens:
         alert_context_tokens(con, ctx_tokens, sid, now, cfg)
+    out["hint"] = status_hint(ctx, ctx_tokens, cfg)
     con.commit()
     return out
+
+
+def _lowest(thresholds):
+    """Lowest threshold of an alerts.json list, or None when the list turns the alert off (empty, null, false...)."""
+    vals = [t for t in thresholds if isinstance(t, (int, float)) and not isinstance(t, bool)] \
+        if isinstance(thresholds, list) else []
+    return min(vals) if vals else None
+
+
+def status_hint(ctx, ctx_tokens, cfg):
+    """What to do now, shown in the status line itself, so it reaches terminals where desktop notifications do not
+    (herdr, ssh, a muted Mac): past the lowest context alert, /compact or /handoff. None when nothing applies, or
+    with "statusline_hint": false in alerts.json."""
+    if cfg.get("statusline_hint", True) is False:
+        return None
+    tok, pct = _lowest(cfg.get("context_tokens")), _lowest(cfg.get("context"))
+    if (ctx_tokens and tok and ctx_tokens >= tok) or (ctx is not None and pct and ctx >= pct):
+        return MSG.get(config.notice_lang(cfg), MSG["en"])["hint_ctx"]
+    return None
 
 
 def alert_context_tokens(con, ctx_tokens, sid, now, cfg, project_dir=None):
@@ -260,6 +282,8 @@ def render(info, color=True):
         parts.append(c(level, "ctx %dk" % round(k)))
     elif info.get("ctx") is not None:
         parts.append(c(info["ctx"], "ctx %d%%" % round(info["ctx"])))
+    if info.get("hint"):
+        parts.append(c(80, info["hint"]))
     return " · ".join(parts)
 
 

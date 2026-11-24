@@ -4,6 +4,7 @@ Every figure says where it comes from: `recorded` (Claude Code cost-state, sprea
 activity), `estimated` (list price, after the last cost-state snapshot) or `list_price`
 (token counts x list price, used for breakdowns that cost-state does not give).
 """
+import bisect
 import collections
 import datetime as dt
 
@@ -605,6 +606,125 @@ def tool_context_view(con, days=30, project=None, today=None):
             "rows": sorted(rows, key=lambda x: (-x["tokens"], x["tool"]))}
 
 
+CODE_MODE_CALLS = ("REPL", "Poll")  # what Code Mode calls itself; the work is the tools its code runs (logged apart)
+CONTEXT_BUCKETS = (100000, 200000, 300000, 500000)  # tokens per request: a young session re-reads less whatever the
+CONTEXT_LABELS = ("<100k", "100k-200k", "200k-300k", "300k-500k", ">=500k")  # mode; on real data each holds 7-25 %
+CODE_MODE_MIN_SESSIONS = 5  # fewer sessions than this in a group and its figures are "not enough data"
+CODE_MODE_GROUPS = ("code_mode", "without", "before")
+
+
+def _context_bucket(tokens):
+    return next((i for i, b in enumerate(CONTEXT_BUCKETS) if tokens < b), len(CONTEXT_BUCKETS))
+
+
+def code_mode_first_day(con):
+    """Local day of the first REPL call of a main session (Code Mode), or None."""
+    row = con.execute("SELECT MIN(ts) FROM tool_calls WHERE name = 'REPL' AND kind = 'main'").fetchone()
+    return dt.date.fromisoformat(_local_day(row[0])) if row and row[0] else None
+
+
+def _code_mode_figures(acc, sessions):
+    """Per-request and per-tool figures of one group (or one group in one context bucket)."""
+    req, tools = acc["requests"], acc["tools"]
+    return {"sessions": len(sessions), "requests": req, "tools": tools, "repl": acc["repl"], "usd": round(acc["usd"], 2),
+            "tools_per_request": tools / req if req else None, "usd_per_tool": acc["usd"] / tools if tools else None,
+            "cache_read_per_tool": acc["cache_read"] / tools if tools else None,
+            "output_per_request": acc["output"] / req if req else None}
+
+
+def _iso_window(w):
+    return {"start": w[0].isoformat(), "end": w[1].isoformat()} if w else None
+
+
+def code_mode_view(con, days=14, since=None, project=None, model=None, today=None):
+    """Main sessions with Code Mode (one REPL call or more) against the rest: `code_mode` and `without` from `since`
+    (default: the first REPL call) to today, `before` the `days` days before `since` (with no Code Mode yet: the last
+    `days` days). A tool run inside a REPL block is logged on its own with no message id, so each tool counts for the
+    latest request of its session, and that request's context size picks the bucket. REPL and Poll are not counted as
+    tools. Sessions that ran no tool are left out; a resumed session's copied requests count once."""
+    today = today or dt.date.today()
+    since = since or code_mode_first_day(con)
+    if since:
+        after, before = (since, today), (since - dt.timedelta(days=days), since - dt.timedelta(days=1))
+    else:
+        after, before = None, (today - dt.timedelta(days=days - 1), today)
+
+    def period(day):
+        if after and _in(day, *after):
+            return "after"
+        return "before" if day and _in(day, *before) else None
+
+    scope = [("kind = 'main'", []), ("project_dir LIKE ?", ["%" + project + "%"]) if project else ("", []),
+             ts_range(*ts_bounds(before[0], today))]
+    repl = {r[0] for r in con.execute("SELECT DISTINCT session_id FROM tool_calls WHERE name = 'REPL' AND kind = 'main'")}
+    reqs, seen = {}, set()
+    for r in select(con, "requests", [*scope, ("model LIKE ?", ["%" + model + "%"]) if model else ("", [])],
+                    order="ts, rowid", cols="session_id, msg_id, ts, model, input, output, cache_read, cache_write, "
+                    "cache_write_5m, cache_write_1h"):
+        key = (r["session_id"], r["msg_id"])
+        if r["msg_id"] and key in seen:  # ts IS NULL never gets here: the ts range in SQL drops it
+            continue
+        seen.add(key)
+        when = period(_local_day(r["ts"]))
+        if not when:
+            continue
+        group = "before" if when == "before" else "code_mode" if r["session_id"] in repl else "without"
+        if group == "before" and r["session_id"] in repl:
+            continue  # Code Mode tried before `since`: neither side
+        reqs.setdefault(r["session_id"], []).append((r["ts"], group, _context_bucket(pricing.context_tokens(r)),
+                                                     pricing.weight(r["model"], r), r["output"] or 0, r["cache_read"] or 0))
+    per = {}  # (session, group, bucket) -> counters
+
+    def counters(sid, group, bucket):
+        return per.setdefault((sid, group, bucket), {"requests": 0, "tools": 0, "repl": 0, "usd": 0.0, "output": 0,
+                                                     "cache_read": 0})
+    for sid, rows in reqs.items():
+        for _ts, group, bucket, usd, out, cread in rows:
+            c = counters(sid, group, bucket)
+            c["requests"] += 1
+            c["usd"] += usd
+            c["output"] += out
+            c["cache_read"] += cread
+    stamps = {sid: [r[0] for r in rows] for sid, rows in reqs.items()}
+    for t in select(con, "tool_calls", scope, order="ts, rowid", cols="session_id, ts, name"):
+        rows = reqs.get(t["session_id"])
+        if not rows:
+            continue
+        i = bisect.bisect_right(stamps[t["session_id"]], t["ts"]) - 1
+        if i < 0:
+            continue  # ran before the first request of the window
+        c = counters(t["session_id"], rows[i][1], rows[i][2])
+        c["repl" if t["name"] == "REPL" else "tools"] += t["name"] != "Poll"
+    worked = {}
+    for (sid, group, _b), c in per.items():
+        worked[(sid, group)] = worked.get((sid, group), 0) + c["tools"]
+    empty = {"requests": 0, "tools": 0, "repl": 0, "usd": 0.0, "output": 0, "cache_read": 0}
+    totals, buckets, members, usd_tool = {}, {}, {}, {}
+    for (sid, group, bucket), c in per.items():
+        if not worked[(sid, group)]:
+            continue
+        for acc in (totals.setdefault(group, dict(empty)), buckets.setdefault((group, bucket), dict(empty))):
+            for k in empty:
+                acc[k] += c[k]
+        members.setdefault(group, set()).add(sid)
+        members.setdefault((group, bucket), set()).add(sid)
+        s = usd_tool.setdefault((group, sid), [0.0, 0])
+        s[0] += c["usd"]
+        s[1] += c["tools"]
+    groups = []
+    for g in CODE_MODE_GROUPS:
+        row = _code_mode_figures(totals.get(g, empty), members.get(g, set()))
+        vals = sorted(u / n for (gg, _sid), (u, n) in usd_tool.items() if gg == g and n)
+        row.update(group=g, median_usd_per_tool=_percentile(vals, 0.5) if vals else None,
+                   enough=row["sessions"] >= CODE_MODE_MIN_SESSIONS)
+        groups.append(row)
+    by_bucket = [{"bucket": label, "groups": [dict(_code_mode_figures(buckets.get((g, i), empty), members.get((g, i), set())),
+                                                    group=g) for g in CODE_MODE_GROUPS]}
+                 for i, label in enumerate(CONTEXT_LABELS)]
+    return {"since": since.isoformat() if since else None, "after": _iso_window(after), "before": _iso_window(before),
+            "groups": groups, "buckets": by_bucket}
+
+
 IDLE_SUMMARY_OUT = 20000  # tokens of a summary when no compaction says (they ran 11k-22k here)
 IDLE_MIN_CASES = 5        # fewer returns than this on either side and the answer is "not enough data"
 IDLE_RAISE_TO = 400000    # the higher threshold weighed against the default
@@ -708,3 +828,51 @@ def idle_compact_view(con, days=30, now=None):
                         "applied": sum(seen), "rate": rate},
             "between": dict(between, net_usd=net, expected_usd=expected), "left": left,
             "verdict": verdict}
+
+
+def harness_view(con, days=30, today=None):
+    """What the other coding harnesses you run cost and use, one row per (harness, provider, model).
+
+    `cache_share` is cache_read of the context read (input + cache_read), the same basis as
+    the Claude Code cache figure; `context_per_request` adds the cache writes too, so a full
+    context rebuild shows up. `error_rate` is the share of requests that ended in error.
+    """
+    from . import harnesses
+    start, end = window(days, today)
+    agg = {}
+    cols = ("harness, session_id, ts, provider, model, input, output, reasoning, cache_read, cache_write, cost_usd, error")
+    for r in select(con, "external_requests", [("ts IS NOT NULL", []), ts_range(*ts_bounds(start, end))],
+                    order="ts, rowid", cols=cols):
+        day = _local_day(r["ts"])
+        if not day or not _in(day, start, end):
+            continue
+        key = (r["harness"], r["provider"], r["model"])
+        a = agg.setdefault(key, {"harness": r["harness"], "provider": r["provider"], "model": r["model"],
+                                 "sessions": set(), "requests": 0, "input": 0, "output": 0, "reasoning": 0,
+                                 "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "errors": 0})
+        if r["session_id"]:
+            a["sessions"].add(r["session_id"])
+        a["requests"] += 1
+        a["input"] += r["input"] or 0
+        a["output"] += r["output"] or 0
+        a["reasoning"] += r["reasoning"] or 0
+        a["cache_read"] += r["cache_read"] or 0
+        a["cache_write"] += r["cache_write"] or 0
+        a["cost_usd"] += r["cost_usd"] or 0.0
+        a["errors"] += r["error"] or 0
+    rows = []
+    for a in agg.values():
+        reqs = a["requests"]
+        denom = a["input"] + a["cache_read"]
+        rows.append({
+            "harness": a["harness"], "provider": a["provider"], "model": a["model"],
+            "sessions": len(a["sessions"]), "requests": reqs,
+            "input": a["input"], "output": a["output"], "reasoning": a["reasoning"],
+            "cache_read": a["cache_read"], "cache_write": a["cache_write"],
+            "cost_usd": round(a["cost_usd"], 4),
+            "cache_share": round(a["cache_read"] / denom, 3) if denom else None,
+            "context_per_request": round((a["input"] + a["cache_read"] + a["cache_write"]) / reqs, 1) if reqs else None,
+            "error_rate": round(a["errors"] / reqs, 3) if reqs else None,
+        })
+    rows.sort(key=lambda r: (-r["requests"], r["harness"], r["provider"] or "", r["model"] or ""))
+    return {"window": {"start": start, "end": end}, "rows": rows, "status": harnesses.status(con)}

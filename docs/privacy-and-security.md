@@ -27,6 +27,14 @@ text never reaches it):
   ids, a budget's name from your `alerts.json`), and which alerts were already sent;
 - bookkeeping: each ingest's counts, and each transcript's size and modification time.
 
+Other coding harnesses (OpenCode 2, and more later) are read the same way, into the same `metrics.db`: per request
+the provider, model and agent names, token counts by type (input, output, reasoning, cache read and write), the
+reported cost and whether it ended in error, plus each session's id, parent id, working directory (cwd, stored
+exactly as for Claude Code sessions) and times. Never stored: any prompt, response, reasoning, message title, file
+path or tool text. The adapter extracts only the declared numeric and name fields and validates each one before it
+is stored; on a build whose SQLite lacks the JSON1 functions it parses each message's JSON in memory to pick out
+those same fields and drops everything else. Nothing beyond the listed fields is persisted.
+
 Next to it:
 
 - your configuration: `alerts.json`, and the optional `projects.json` and `accounts.json`;
