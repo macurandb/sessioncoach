@@ -24,6 +24,13 @@ def cmd_ingest(args):
     if args.import_jsonl:
         imp = collect.import_jsonl(con, args.import_jsonl)
         added = {k: added[k] + imp[k] for k in added}
+    try:  # other coding harnesses (OpenCode ...); their ingest must never fail this one
+        from . import harnesses
+        harness = harnesses.ingest(con)
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        harness = {}
     cost.rebuild_slices(con)
     from . import limits
     limits.evaluate_budgets(con)
@@ -42,8 +49,8 @@ def cmd_ingest(args):
     counts = {t: con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0] for t in ("requests", "cost_state", "subagents", "tool_calls")}
     store.checkpoint(con)
     # scheduled runs append this line to ingest.log: "at" says when each one ran
-    print(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "db": paths.db_path(), "added": added, "total": counts,
-                      "files": stats}))
+    print(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "db": paths.db_path(), "added": added, "harness": harness,
+                      "total": counts, "files": stats}))
 
 
 def _no_db():
@@ -176,6 +183,33 @@ def cmd_codemode(args):
     print("\n  $ = list price, API equivalent. Tools run inside a REPL block count as tools; REPL and Poll do not.")
     print("  Main sessions only: subagents are not counted.")
     print("  A fair answer needs both modes on the same kind of work: alternate it (CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0 claude).")
+def cmd_harness(args):
+    if _no_db():
+        return 1
+    con = store.connect(paths.db_path())
+    v = analysis.harness_view(con, days=args.days or None)
+    w = v["window"]
+    print("sessioncoach harness — %s → %s   (numbers and names only, no prompts or output)"
+          % (w["start"] or "all", w["end"]))
+    if not v["rows"]:
+        print("  no harness data yet — run: sessioncoach ingest")
+    else:
+        print("\n  %-9s %-16s %-20s %9s %8s %10s %10s %9s %9s %9s %10s %6s" % (
+            "harness", "provider", "model", "sessions", "requests", "input", "output", "reason", "cache_r", "cache_w",
+            "cost", "err%"))
+        for r in v["rows"]:
+            cost = "-" if r["cost_usd"] is None else "%.4f" % r["cost_usd"]
+            print("  %-9s %-16s %-20s %9d %8d %10s %10s %9s %9s %9s %10s %5.1f%%" % (
+                r["harness"], (r["provider"] or "-")[:16], (r["model"] or "-")[:20],
+                r["sessions"], r["requests"], _fmt(r["input"]), _fmt(r["output"]), _fmt(r["reasoning"]),
+                _fmt(r["cache_read"]), _fmt(r["cache_write"]), cost, (r["error_rate"] or 0) * 100))
+    for s in v["status"]:
+        parts = ["last ok %s" % s["last_ok"] if s["last_ok"] else "not read yet",
+                 "%s rows" % (s["rows"] if s["rows"] is not None else 0)]
+        if s["last_error"]:
+            parts.append("last error: %s" % s["last_error"])
+        print("  %s at %s — %s" % (s["harness"], s["path"], "; ".join(parts)))
+    return 0
 
 
 def cmd_alerts(args):
@@ -503,6 +537,7 @@ VALUE = {
     "day": "Catch an expensive day early: today against yesterday, per account and project.",
     "tools": "Find out whether exploration or one MCP server is eating your turns, and which tool fills your context.",
     "codemode": "Whether Code Mode pays: tools per request and cost per tool, with it and without, at equal context size.",
+    "harness": "What the other coding agents you run cost and use, per provider and model.",
     "verify": "How far to trust the cost figures before you act on them.",
     "statusline": "The command Claude Code runs to draw the status line (statusline-install sets it up).",
     "statusline-install": "See a plan limit coming before it stops you: limits and alerts in the status line.",
@@ -633,6 +668,8 @@ def build_parser():
     cm.add_argument("--days", type=int, default=14, help="days before --since to compare with (default 14)")
     cm.add_argument("--project", help="substring of the project directory")
     cm.add_argument("--model", help="substring of the model name, e.g. opus")
+    hn = _add(sub, "harness")
+    hn.add_argument("--days", type=int, default=30, help="window in days (0 = all)")
     _add(sub, "verify")
     sl = _add(sub, "statusline")
     sl.add_argument("--chain-file", help="shell file with the previous status line command to run first")
@@ -715,7 +752,7 @@ def main(argv=None):
     p, sub = build_parser()
     args = p.parse_args(argv)
     handlers = {"ingest": cmd_ingest, "report": cmd_report, "day": cmd_day, "alerts": cmd_alerts, "alert-log": cmd_alert_log,
-                "tools": cmd_tools, "codemode": cmd_codemode,
+                "tools": cmd_tools, "codemode": cmd_codemode, "harness": cmd_harness,
                 "statusline": cmd_statusline, "statusline-install": cmd_statusline_install,
                 "statusline-uninstall": cmd_statusline_uninstall, "verify": cmd_verify, "hook": cmd_hook,
                 "hook-install": cmd_hook_install, "hook-uninstall": cmd_hook_uninstall, "dashboard": cmd_dashboard, "demo": cmd_demo,

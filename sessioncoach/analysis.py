@@ -828,3 +828,51 @@ def idle_compact_view(con, days=30, now=None):
                         "applied": sum(seen), "rate": rate},
             "between": dict(between, net_usd=net, expected_usd=expected), "left": left,
             "verdict": verdict}
+
+
+def harness_view(con, days=30, today=None):
+    """What the other coding harnesses you run cost and use, one row per (harness, provider, model).
+
+    `cache_share` is cache_read of the context read (input + cache_read), the same basis as
+    the Claude Code cache figure; `context_per_request` adds the cache writes too, so a full
+    context rebuild shows up. `error_rate` is the share of requests that ended in error.
+    """
+    from . import harnesses
+    start, end = window(days, today)
+    agg = {}
+    cols = ("harness, session_id, ts, provider, model, input, output, reasoning, cache_read, cache_write, cost_usd, error")
+    for r in select(con, "external_requests", [("ts IS NOT NULL", []), ts_range(*ts_bounds(start, end))],
+                    order="ts, rowid", cols=cols):
+        day = _local_day(r["ts"])
+        if not day or not _in(day, start, end):
+            continue
+        key = (r["harness"], r["provider"], r["model"])
+        a = agg.setdefault(key, {"harness": r["harness"], "provider": r["provider"], "model": r["model"],
+                                 "sessions": set(), "requests": 0, "input": 0, "output": 0, "reasoning": 0,
+                                 "cache_read": 0, "cache_write": 0, "cost_usd": 0.0, "errors": 0})
+        if r["session_id"]:
+            a["sessions"].add(r["session_id"])
+        a["requests"] += 1
+        a["input"] += r["input"] or 0
+        a["output"] += r["output"] or 0
+        a["reasoning"] += r["reasoning"] or 0
+        a["cache_read"] += r["cache_read"] or 0
+        a["cache_write"] += r["cache_write"] or 0
+        a["cost_usd"] += r["cost_usd"] or 0.0
+        a["errors"] += r["error"] or 0
+    rows = []
+    for a in agg.values():
+        reqs = a["requests"]
+        denom = a["input"] + a["cache_read"]
+        rows.append({
+            "harness": a["harness"], "provider": a["provider"], "model": a["model"],
+            "sessions": len(a["sessions"]), "requests": reqs,
+            "input": a["input"], "output": a["output"], "reasoning": a["reasoning"],
+            "cache_read": a["cache_read"], "cache_write": a["cache_write"],
+            "cost_usd": round(a["cost_usd"], 4),
+            "cache_share": round(a["cache_read"] / denom, 3) if denom else None,
+            "context_per_request": round((a["input"] + a["cache_read"] + a["cache_write"]) / reqs, 1) if reqs else None,
+            "error_rate": round(a["errors"] / reqs, 3) if reqs else None,
+        })
+    rows.sort(key=lambda r: (-r["requests"], r["harness"], r["provider"] or "", r["model"] or ""))
+    return {"window": {"start": start, "end": end}, "rows": rows, "status": harnesses.status(con)}
