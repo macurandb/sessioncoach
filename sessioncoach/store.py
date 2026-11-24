@@ -65,6 +65,18 @@ CREATE TABLE IF NOT EXISTS files_seen (
   path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, version INTEGER NOT NULL,
   seen_at TEXT
 );
+CREATE TABLE IF NOT EXISTS external_requests (
+  harness TEXT NOT NULL, request_id TEXT NOT NULL, session_id TEXT, ts TEXT, provider TEXT,
+  model TEXT, agent TEXT, input INTEGER, output INTEGER, reasoning INTEGER, cache_read INTEGER,
+  cache_write INTEGER, cost_usd REAL, error INTEGER, PRIMARY KEY (harness, request_id)
+);
+CREATE TABLE IF NOT EXISTS external_sessions (
+  harness TEXT NOT NULL, session_id TEXT NOT NULL, parent_id TEXT, cwd TEXT, started TEXT,
+  ended TEXT, compactions INTEGER, PRIMARY KEY (harness, session_id)
+);
+CREATE TABLE IF NOT EXISTS harness_status (
+  harness TEXT PRIMARY KEY, path TEXT, cursor TEXT, last_ok TEXT, last_error TEXT, rows INTEGER
+);
 """
 SCHEMA_VERSION = 1  # PRAGMA user_version: 1 = files_seen exists. Tables and columns are still added by SCHEMA and MIGRATIONS
 
@@ -73,6 +85,13 @@ REQ_COLS = ("project_dir", "file", "msg_id", "request_id", "session_id", "kind",
 TOOL_COLS = ("project_dir", "tool_use_id", "session_id", "kind", "ts", "name", "root", "msg_id")
 SUB_COLS = ("project_dir", "session_id", "agent_id", "subagent_type", "model", "ts", "tokens",
             "tool_uses", "duration_ms", "source", "root")
+EXT_REQ_COLS = ("harness", "request_id", "session_id", "ts", "provider", "model", "agent",
+                "input", "output", "reasoning", "cache_read", "cache_write", "cost_usd", "error")
+EXT_SESS_COLS = ("harness", "session_id", "parent_id", "cwd", "started", "ended", "compactions")
+# the non-key columns each external upsert compares, to tell a new/changed row from a quiet re-read
+EXT_REQ_UPDATE = ("session_id", "ts", "provider", "model", "agent", "input", "output", "reasoning",
+                  "cache_read", "cache_write", "cost_usd", "error")
+EXT_SESS_UPDATE = ("parent_id", "cwd", "started", "ended", "compactions")
 
 # Additive migrations: columns added after the first release. Rows that predate a column keep
 # NULL, which readers treat as the default transcript root.
@@ -263,3 +282,38 @@ def add_session_dir(con, r):
                 "ON CONFLICT(project_dir, session_id, dir) DO UPDATE SET ts = excluded.ts "
                 "WHERE excluded.ts < session_dirs.ts", (r["project_dir"], r["session_id"], r["dir"], r.get("ts"), r.get("root")))
     return 1 if con.total_changes > before else 0
+
+
+def add_external_request(con, r):
+    """A request another coding harness made: numbers and names only (extracted by its adapter).
+
+    Upsert: a message updated later replaces its row. Returns 1 when the row is new or changed,
+    0 when it was already stored unchanged (a boundary re-read after `>=`).
+    """
+    sets = ", ".join("%s = excluded.%s" % (c, c) for c in EXT_REQ_UPDATE)
+    where = " OR ".join("external_requests.%s IS NOT excluded.%s" % (c, c) for c in EXT_REQ_UPDATE)
+    cur = con.execute(
+        "INSERT INTO external_requests (%s) VALUES (%s) ON CONFLICT(harness, request_id) DO UPDATE SET %s WHERE %s"
+        % (",".join(EXT_REQ_COLS), ",".join("?" * len(EXT_REQ_COLS)), sets, where),
+        [r.get(c) for c in EXT_REQ_COLS])
+    return cur.rowcount
+
+
+def add_external_session(con, r):
+    """A session of another harness: id, parent, working dir, times and its compaction count.
+
+    Returns 1 when the row is new or changed, 0 when it was already stored unchanged.
+    """
+    sets = ", ".join("%s = excluded.%s" % (c, c) for c in EXT_SESS_UPDATE)
+    where = " OR ".join("external_sessions.%s IS NOT excluded.%s" % (c, c) for c in EXT_SESS_UPDATE)
+    cur = con.execute(
+        "INSERT INTO external_sessions (%s) VALUES (%s) ON CONFLICT(harness, session_id) DO UPDATE SET %s WHERE %s"
+        % (",".join(EXT_SESS_COLS), ",".join("?" * len(EXT_SESS_COLS)), sets, where),
+        [r.get(c) for c in EXT_SESS_COLS])
+    return cur.rowcount
+
+
+def set_harness_status(con, harness, path, cursor, last_ok, last_error, rows):
+    """Where a harness was read to (cursor) and whether its last read succeeded or failed."""
+    con.execute("INSERT OR REPLACE INTO harness_status (harness, path, cursor, last_ok, last_error, rows) "
+                "VALUES (?,?,?,?,?,?)", (harness, path, cursor, last_ok, last_error, rows))
