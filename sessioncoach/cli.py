@@ -139,6 +139,50 @@ def cmd_tools(args):
                                                     r["top1_share"] * 100))
 
 
+CODE_MODE_TITLES = {"code_mode": "Code Mode", "without": "without (same days)", "before": "before Code Mode"}
+
+
+def _code_mode_row(label, g):
+    def num(v, fmt):
+        return fmt % v if v is not None else "-"
+    return "  %-30s %8d %8d %7d %9s %9s %12s %8s %6d" % (
+        label, g["sessions"], g["requests"], g["tools"], num(g["tools_per_request"], "%.2f"), num(g["usd_per_tool"], "%.3f"),
+        num(g["cache_read_per_tool"] and g["cache_read_per_tool"] / 1000, "%.0fk"), num(g["output_per_request"], "%.0f"),
+        g["repl"])
+
+
+def cmd_codemode(args):
+    import datetime as dt
+    since = dt.date.fromisoformat(args.since) if args.since else None
+    if args.days < 1 or (since and since > dt.date.today()):
+        print("codemode: --days must be 1 or more and --since not after today", file=sys.stderr)
+        return 2
+    if _no_db():
+        return 1
+    con = store.connect(paths.db_path())
+    v = analysis.code_mode_view(con, days=args.days, since=since,
+                                project=args.project, model=args.model)
+    b, a = v["before"], v["after"]
+    print("sessioncoach codemode — %s   before: %s → %s%s" % (
+        "Code Mode since %s → %s" % (a["start"], a["end"]) if a else "no Code Mode session yet (no REPL call)",
+        b["start"], b["end"], "   project ~ " + args.project if args.project else ""))
+    head = "  %-30s %8s %8s %7s %9s %9s %12s %8s %6s" % ("group", "sessions", "requests", "tools", "tools/req", "$/tool",
+                                                         "ctx read/tool", "out/req", "REPL")
+    print("\n" + head)
+    for g in v["groups"]:
+        print(_code_mode_row(CODE_MODE_TITLES[g["group"]], g) + ("" if g["enough"] else "   not enough data"))
+    print("\n  median $/tool per session: " + "   ".join(
+        "%s %s" % (CODE_MODE_TITLES[g["group"]], "%.3f" % g["median_usd_per_tool"] if g["median_usd_per_tool"] is not None
+                   else "-") for g in v["groups"]))
+    print("\n  by context size per request (a young session re-reads less in any mode: compare inside one size)")
+    print(head)
+    for bucket in v["buckets"]:
+        for g in bucket["groups"]:
+            if g["requests"]:
+                print(_code_mode_row("%s %s" % (bucket["bucket"], CODE_MODE_TITLES[g["group"]]), g))
+    print("\n  $ = list price, API equivalent. Tools run inside a REPL block count as tools; REPL and Poll do not.")
+    print("  Main sessions only: subagents are not counted.")
+    print("  A fair answer needs both modes on the same kind of work: alternate it (CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0 claude).")
 def cmd_harness(args):
     if _no_db():
         return 1
@@ -492,6 +536,7 @@ VALUE = {
     "report": "Where your money goes and what to change first, in the terminal.",
     "day": "Catch an expensive day early: today against yesterday, per account and project.",
     "tools": "Find out whether exploration or one MCP server is eating your turns, and which tool fills your context.",
+    "codemode": "Whether Code Mode pays: tools per request and cost per tool, with it and without, at equal context size.",
     "harness": "What the other coding agents you run cost and use, per provider and model.",
     "verify": "How far to trust the cost figures before you act on them.",
     "statusline": "The command Claude Code runs to draw the status line (statusline-install sets it up).",
@@ -618,6 +663,11 @@ def build_parser():
     tl = _add(sub, "tools")
     tl.add_argument("--days", type=int, default=30, help="window in days (0 = all)")
     tl.add_argument("--project", help="substring of the project directory")
+    cm = _add(sub, "codemode")
+    cm.add_argument("--since", help="YYYY-MM-DD Code Mode was turned on (default: the first REPL call)")
+    cm.add_argument("--days", type=int, default=14, help="days before --since to compare with (default 14)")
+    cm.add_argument("--project", help="substring of the project directory")
+    cm.add_argument("--model", help="substring of the model name, e.g. opus")
     hn = _add(sub, "harness")
     hn.add_argument("--days", type=int, default=30, help="window in days (0 = all)")
     _add(sub, "verify")
@@ -702,7 +752,7 @@ def main(argv=None):
     p, sub = build_parser()
     args = p.parse_args(argv)
     handlers = {"ingest": cmd_ingest, "report": cmd_report, "day": cmd_day, "alerts": cmd_alerts, "alert-log": cmd_alert_log,
-                "tools": cmd_tools, "harness": cmd_harness,
+                "tools": cmd_tools, "codemode": cmd_codemode, "harness": cmd_harness,
                 "statusline": cmd_statusline, "statusline-install": cmd_statusline_install,
                 "statusline-uninstall": cmd_statusline_uninstall, "verify": cmd_verify, "hook": cmd_hook,
                 "hook-install": cmd_hook_install, "hook-uninstall": cmd_hook_uninstall, "dashboard": cmd_dashboard, "demo": cmd_demo,
