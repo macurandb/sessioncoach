@@ -146,10 +146,14 @@ def _code_mode_row(label, g):
 
 def cmd_codemode(args):
     import datetime as dt
+    since = dt.date.fromisoformat(args.since) if args.since else None
+    if args.days < 1 or (since and since > dt.date.today()):
+        print("codemode: --days must be 1 or more and --since not after today", file=sys.stderr)
+        return 2
     if _no_db():
         return 1
     con = store.connect(paths.db_path())
-    v = analysis.code_mode_view(con, days=args.days, since=dt.date.fromisoformat(args.since) if args.since else None,
+    v = analysis.code_mode_view(con, days=args.days, since=since,
                                 project=args.project, model=args.model)
     b, a = v["before"], v["after"]
     print("sessioncoach codemode — %s   before: %s → %s%s" % (
@@ -170,6 +174,7 @@ def cmd_codemode(args):
             if g["requests"]:
                 print(_code_mode_row("%s %s" % (bucket["bucket"], CODE_MODE_TITLES[g["group"]]), g))
     print("\n  $ = list price, API equivalent. Tools run inside a REPL block count as tools; REPL and Poll do not.")
+    print("  Main sessions only: subagents are not counted.")
     print("  A fair answer needs both modes on the same kind of work: alternate it (CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=0 claude).")
 
 

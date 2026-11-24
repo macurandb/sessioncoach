@@ -662,7 +662,7 @@ def code_mode_view(con, days=14, since=None, project=None, model=None, today=Non
                     order="ts, rowid", cols="session_id, msg_id, ts, model, input, output, cache_read, cache_write, "
                     "cache_write_5m, cache_write_1h"):
         key = (r["session_id"], r["msg_id"])
-        if not r["ts"] or (r["msg_id"] and key in seen):
+        if r["msg_id"] and key in seen:  # ts IS NULL never gets here: the ts range in SQL drops it
             continue
         seen.add(key)
         when = period(_local_day(r["ts"]))
@@ -688,7 +688,7 @@ def code_mode_view(con, days=14, since=None, project=None, model=None, today=Non
     stamps = {sid: [r[0] for r in rows] for sid, rows in reqs.items()}
     for t in select(con, "tool_calls", scope, order="ts, rowid", cols="session_id, ts, name"):
         rows = reqs.get(t["session_id"])
-        if not rows or not t["ts"]:
+        if not rows:
             continue
         i = bisect.bisect_right(stamps[t["session_id"]], t["ts"]) - 1
         if i < 0:

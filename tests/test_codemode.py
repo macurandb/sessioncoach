@@ -162,6 +162,12 @@ class TestCli(Base):
         rc, out = self.run_cli("codemode")
         self.assertIn("no Code Mode session yet", out)
 
+    def test_rejects_an_empty_window(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.run_cli("codemode", "--days", "0")[0], 2)
+            self.assertEqual(self.run_cli("codemode", "--since", "2999-01-01")[0], 2)
+        self.assertIn("--days must be 1 or more", err.getvalue())
+
     def test_no_database(self):
         os.remove(paths.db_path())
         with contextlib.redirect_stderr(io.StringIO()):
