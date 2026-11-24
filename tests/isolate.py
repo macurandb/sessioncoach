@@ -10,6 +10,7 @@ for _k in [k for k in os.environ if k.startswith("SESSIONCOACH_")]:
     del os.environ[_k]
 os.environ["KIT_SCHEDULER"] = "none"  # not setdefault: a KIT_SCHEDULER=cron in the shell must not reach the real crontab
 os.environ.pop("XDG_CONFIG_HOME", None)
+os.environ.pop("HERDR_APP_HOME", None)  # the Herdr panel check must never read the real ~/.config/herdr-app
 
 SCHEDULER_TOOLS = ("schtasks", "crontab", "systemctl", "launchctl")
 

@@ -23,6 +23,7 @@ from . import (
     analysis,
     config,
     handoff,
+    herdr,
     hooks,
     idlecompact,
     idleguard,
@@ -740,6 +741,7 @@ def check(cwd=None, agents_dir=None, now=None, load_fn=launchd_loaded, mac=None)
     if value is None and idleguard.enabled(alerts):
         items.append((OK, "idle summary threshold", "not set: Claude Code's default, %dk — whether %dk pays off for you: "
                       "sessioncoach idle-compact" % (idlecompact.DEFAULT_MIN_TOKENS // 1000, idlecompact.FLOOR_MIN_TOKENS // 1000)))
+    items += herdr.check()  # silent when Herdr is not installed
     # permissions
     d = paths.data_dir()
     if os.path.isdir(d) and paths.is_windows():
