@@ -101,8 +101,11 @@ class Base(unittest.TestCase):
         self.data = os.path.join(self.tmp, "data")
         os.makedirs(self.data, exist_ok=True)
         self.metrics = os.path.join(self.data, "metrics.db")
+        # a cleanup, not tearDown: cleanups run last-in first-out after tearDown, so the connections the
+        # tests close with addCleanup are closed before this removes their files (Windows cannot delete open files)
+        self.addCleanup(self._restore)
 
-    def tearDown(self):
+    def _restore(self):
         paths.HOME = self.home
         for k, v in self.saved.items():
             os.environ.pop(k, None)
