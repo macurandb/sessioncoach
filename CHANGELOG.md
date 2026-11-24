@@ -16,6 +16,8 @@
   turns carry), from token counts only. Compare tools with it: it also holds what arrives with a result, such as hook
   output.
 - Sessions started inside a Claude Code scratchpad count for the project that owns it, not as a project of their own.
+- On macOS, an alert that terminal-notifier cannot show (its notifications not allowed yet in System Settings) goes
+  out through osascript instead of being lost.
 
 ## 0.1.1 - 2026-10-26
 
