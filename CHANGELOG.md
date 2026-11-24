@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `sessioncoach harness` measures the other coding harnesses you run (OpenCode 2 first), per provider and model:
+  the same token, cache and error figures as Claude Code, read from `opencode.db` into `metrics.db` (numbers and
+  names only, never prompts or output). `sessioncoach ingest` reads them incrementally, and `sessioncoach check`
+  reports when one is found but could not be read.
 - `sessioncoach --version` works, as `sessioncoach version` already did.
 - The dashboard server reads the body of a POST it rejects, so a Windows client gets the error instead of a reset
   connection.

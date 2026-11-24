@@ -114,6 +114,7 @@ undo it.
 | `report` | Where your money goes and what to change first, in the terminal. |
 | `day` | Catch an expensive day early: today against yesterday, per account and project. |
 | `tools` | Find out whether exploration or one MCP server is eating your turns, and which tool fills your context. |
+| `harness` | What the other coding agents you run cost and use, per provider and model. |
 | `verify` | How far to trust the cost figures before you act on them. |
 | `statusline` | The command Claude Code runs to draw the status line (statusline-install sets it up). |
 | `statusline-install` | See a plan limit coming before it stops you: limits and alerts in the status line. |
