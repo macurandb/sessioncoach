@@ -313,13 +313,16 @@ def _today_usd(con, day, session_id):
 
 
 def _limits(con, now):
-    """The latest plan-limit sample (any session), or None when there is none or it is stale."""
-    row = con.execute("SELECT ts, five_pct, five_reset, seven_pct, seven_reset FROM limits_samples "
-                      "ORDER BY ts DESC LIMIT 1").fetchone()
-    if not row or row["ts"] is None or now - row["ts"] > LIMITS_STALE_S:
+    """Each window's latest non-null sample (any session) of the last 6 h, or None when neither has one.
+    A sample can carry one window only, so the newest row alone may leave the other null."""
+    out = {}
+    for key, pct, reset in (("five_hour", "five_pct", "five_reset"), ("seven_day", "seven_pct", "seven_reset")):
+        row = con.execute("SELECT %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND ts >= ? "
+                          "ORDER BY ts DESC LIMIT 1" % (pct, reset, pct), (now - LIMITS_STALE_S,)).fetchone()
+        out[key] = {"pct": row["pct"] if row else None, "resets_at": row["reset"] if row else None}
+    if all(v["pct"] is None for v in out.values()):
         return None
-    return {"five_hour": {"pct": row["five_pct"], "resets_at": row["five_reset"]},
-            "seven_day": {"pct": row["seven_pct"], "resets_at": row["seven_reset"]}}
+    return out
 
 
 def _level(source, data):

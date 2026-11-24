@@ -73,8 +73,9 @@ Epoch seconds of the moment the document was built. `cache_expires_at`, `last_ac
 
 ### `limits`
 
-The latest `limits_samples` row (from any session) as its 5-hour and 7-day percentages and reset
-times, both epoch seconds. `null` when there is no sample or the latest one is older than 6 h.
+For each window, the latest `limits_samples` row (from any session) of the last 6 h that reports it:
+the 5-hour and 7-day percentages and reset times, both epoch seconds. A sample can carry one window
+only, so each window is looked up on its own. `null` when neither window has a sample in the last 6 h.
 Both keys are always present; a window the status line did not report has `null` values.
 
 ### `sessions`

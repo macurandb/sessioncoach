@@ -420,6 +420,18 @@ class Live(unittest.TestCase):
         con.close()
         self.assertIsNone(self.view()["limits"])
 
+    def test_limits_take_each_window_from_its_latest_sample(self):
+        self.build_db()
+        con = store.connect(self.db)
+        # a newer sample that carries only the 7-day window must not hide the 5-hour one
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset, seven_pct, seven_reset) "
+                    "VALUES (?, 'sid-x', 'r', NULL, NULL, 50.0, ?)", (NOW - 10, NOW + 86400 * 2))
+        con.commit()
+        con.close()
+        lim = self.view()["limits"]
+        self.assertEqual(lim["five_hour"], {"pct": 22.0, "resets_at": NOW + 3600})
+        self.assertEqual(lim["seven_day"]["pct"], 50.0)
+
     def test_events_window_since_and_cursor(self):
         self.build_db(events=[
             {"source": "context_tokens", "data": {"context": 999000}, "session_id": "sid-a", "ts": NOW - 86400 * 2},
@@ -459,6 +471,18 @@ class Live(unittest.TestCase):
         self.assertIn("tokens de contexto", e["context_tokens"]["title"])
         self.assertEqual(e["mystery"]["title"], "mystery")
         self.assertEqual(e["mystery"]["body"], "")
+
+    def test_hook_and_budget_projection_events_have_text(self):
+        for lang, word in (("es", "caché caducada"), ("en", "cache expired")):
+            t, b = alertlog.describe("hook", {"idle_s": 4200, "context": 205000}, lang)
+            self.assertIn("70 min", t)
+            self.assertIn(word, t)
+            self.assertIn("205k", b)
+            t, b = alertlog.describe("budget_projection", {"name": "team", "projected_usd": 914.3, "limit_usd": 900}, lang)
+            self.assertIn("team", t)
+            self.assertIn("$914", b)
+            self.assertIn("$900", b)
+        self.assertTrue(alertlog.describe("hook", {}, "en")[0])  # old rows without numbers still read
 
     def test_levels(self):
         self.assertEqual(live._level("five_hour", {"pct": 95}), "warning")

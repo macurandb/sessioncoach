@@ -15,7 +15,7 @@ Pauses not warned are split: `missed` (the warning failed: no ingest in the wind
 import datetime as dt
 import json
 
-from . import config, cost, expiry, limits, pricing
+from . import config, cost, expiry, limits, nudge, pricing
 from .projects import Labeler
 
 OUTCOME_WINDOW_S = 3600  # what the person did after a hook warning, looked for within this time
@@ -40,6 +40,9 @@ _EXPIRY = {
 # stored) gets a body without the period clause.
 _PERIOD = {"es": {"day": "el día", "month": "el mes"}, "en": {"day": "the day", "month": "the month"}}
 _BUDGET_M_NO_PERIOD = {"es": "{u} de {l} (equivalente API).", "en": "{u} of {l} (API-equivalent)."}
+
+_RESUME = {"es": {"t": "Claude · vuelta tras {m} min con la caché caducada"},
+           "en": {"t": "Claude · back after {m} min, cache expired"}}
 
 
 def describe(source, data, lang):
@@ -69,6 +72,15 @@ def describe(source, data, lang):
         body = m["budget_m"].format(u="$%.0f" % used, l="$%.0f" % limit, per=per) if per \
             else _BUDGET_M_NO_PERIOD[lang].format(u="$%.0f" % used, l="$%.0f" % limit)
         return title, body
+    if source == "budget_projection":
+        return (m["budget_proj_t"].format(n=data.get("name") or ""),
+                m["budget_proj_m"].format(p="$%.0f" % (data.get("projected_usd") or 0),
+                                          l="$%.0f" % (data.get("limit_usd") or 0)))
+    if source == "hook":  # the resume warning the prompt hook showed (first line of nudge.MSG)
+        h = _RESUME.get(lang, _RESUME["en"])
+        mins = round((data.get("idle_s") or 0) / 60)
+        k = int((data.get("context") or 0) / 1000)
+        return h["t"].format(m=mins), nudge.MSG[lang].split("\n")[0].split(" · ", 1)[1].format(m=mins, k=k)
     if source == "cache_expiry":
         e = _EXPIRY.get(lang, _EXPIRY["en"])
         n = max(1, round((data.get("remaining_s") or 0) / 60))
