@@ -28,6 +28,7 @@ class Base(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         self.con = store.connect(paths.db_path())
+        self.addCleanup(self.con.close)
         self.n = 0
 
     def req(self, sid, ts, ctx=40000, output=100, msg=None, file=None, model=OPUS, project="-p-app"):
@@ -169,6 +170,7 @@ class TestCli(Base):
         self.assertIn("--days must be 1 or more", err.getvalue())
 
     def test_no_database(self):
+        self.con.close()  # Windows cannot remove a file that is still open
         os.remove(paths.db_path())
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.run_cli("codemode")[0], 1)
