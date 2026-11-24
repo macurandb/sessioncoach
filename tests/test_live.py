@@ -241,6 +241,10 @@ class Live(unittest.TestCase):
                          os.path.join(self.projects, "-Users-x-code-shop", "sid-a.jsonl"))
 
     def test_proc_start_match_mismatch_and_failing(self):
+        # the POSIX path (mocked ps), on every platform; Windows skips this check on purpose
+        for p in (mock.patch("os.name", "posix"), mock.patch.object(live, "_pid_alive", return_value=True)):
+            p.start()
+            self.addCleanup(p.stop)
         start = "Tue Nov 24 11:10:51 2026"
         with open(os.path.join(self.sessions_dir, "1002.json"), "w") as fh:
             json.dump({"pid": 1002, "sessionId": "sid-b", "cwd": "/Users/x/code/api", "status": "busy",
@@ -707,6 +711,11 @@ class Helpers(unittest.TestCase):
 
 
 class ProcStart(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch("os.name", "posix")  # ps is mocked: test the POSIX path on Windows too
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_norm(self):
         self.assertEqual(live._norm("  Tue   Nov 24  11:10:51 2026  \n"), "Tue Nov 24 11:10:51 2026")
 
@@ -734,6 +743,7 @@ class ProcStart(unittest.TestCase):
 
 
 class PidAlive(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "a real os.kill(pid, 0) probe; on Windows signal 0 is a console Ctrl+C")
     def test_posix(self):
         self.assertTrue(live._pid_alive(os.getpid()))
         self.assertFalse(live._pid_alive(DEAD_PID))
