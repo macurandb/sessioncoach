@@ -296,7 +296,7 @@ class Live(unittest.TestCase):
         self.addCleanup(c.close)
         start = time.time()
         v = self.view()
-        self.assertLess(time.time() - start, 4.0)  # bounded by the 1 s timeout, not the old ~10 s
+        self.assertLess(time.time() - start, 4.0)  # one wait of the 1 s timeout (not two, nor the old ~10 s)
         self.assertIsNone(v["limits"])
         self.assertEqual(v["events"], [])
         self.assertEqual(v["cursor"], None)
@@ -339,11 +339,11 @@ class Live(unittest.TestCase):
         self.assertTrue(all(s["source"] in ("transcript", None) for s in v["sessions"]))
 
     def test_owned_connection_closed_after_lock(self):
+        # the lock hits the first query (it can come after the open): the connection live opened is still closed
         c = sqlite3.connect(self.db)
         c.execute("CREATE TABLE requests (ts TEXT)")
         c.commit()
-        c.execute("BEGIN EXCLUSIVE")
-        self.addCleanup(c.close)
+        c.close()
         opened = {}
         real_open_readonly = store.open_readonly
 
@@ -352,7 +352,9 @@ class Live(unittest.TestCase):
             opened["con"] = con
             return con
 
-        with mock.patch("sessioncoach.store.open_readonly", side_effect=_open):
+        locked = sqlite3.OperationalError("database is locked")
+        with mock.patch("sessioncoach.store.open_readonly", side_effect=_open), \
+                mock.patch("sessioncoach.live._tables", side_effect=locked):
             self.view()
         self.assertIn("con", opened)
         with self.assertRaises(sqlite3.ProgrammingError):

@@ -276,6 +276,25 @@ class TestWal(unittest.TestCase):
             ro.execute("INSERT INTO alerts_sent VALUES ('x', 1)")
         ro.close()
 
+    def test_open_readonly_waits_for_a_lock_only_once(self):
+        # a rollback-journal database under an exclusive lock: the plain-connection fallback would wait again
+        os.makedirs(os.path.dirname(self.db), exist_ok=True)
+        c = sqlite3.connect(self.db)
+        self.addCleanup(c.close)
+        c.execute("CREATE TABLE t (x)")
+        c.commit()
+        c.execute("BEGIN EXCLUSIVE")
+        with mock.patch("sessioncoach.store.sqlite3.connect", wraps=sqlite3.connect) as conn, \
+                self.assertRaises(sqlite3.OperationalError):
+            store.open_readonly(self.db, timeout=0.1)
+        self.assertEqual(conn.call_count, 1)
+
+    def test_busy_reads_the_lock_errors_only(self):
+        self.assertTrue(store._busy(sqlite3.OperationalError("database is locked")))
+        self.assertTrue(store._busy(sqlite3.OperationalError("database table is locked")))
+        self.assertTrue(store._busy(sqlite3.OperationalError("SQLITE_BUSY")))
+        self.assertFalse(store._busy(sqlite3.OperationalError("unable to open database file")))
+
     def test_open_readonly_does_not_create_a_missing_database(self):
         os.makedirs(os.path.dirname(self.db))
         with self.assertRaises(sqlite3.OperationalError):

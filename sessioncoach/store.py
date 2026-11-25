@@ -132,6 +132,12 @@ def checkpoint(con):
         pass
 
 
+def _busy(e):
+    """True when SQLite gave up waiting for a lock (SQLITE_BUSY / SQLITE_LOCKED); the message is all 3.9 has."""
+    msg = str(e).lower()
+    return "locked" in msg or "busy" in msg
+
+
 def open_readonly(path, timeout=None):
     """Connection that cannot write. `mode=ro` alone fails on a WAL database whose -wal/-shm files are gone
     (nobody holds it open), because it cannot create them; then a normal connection that refuses writes is used.
@@ -140,8 +146,9 @@ def open_readonly(path, timeout=None):
     try:
         con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True, **kw)
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1")  # opening is lazy: the WAL files are touched here
-    except sqlite3.OperationalError:
-        if not os.path.exists(path):
+    except sqlite3.OperationalError as e:
+        # busy: the fallback would only wait out the same lock a second time (two timeouts instead of one)
+        if not os.path.exists(path) or _busy(e):
             raise
         con = sqlite3.connect(path, **kw)
         con.execute("PRAGMA query_only = ON")
