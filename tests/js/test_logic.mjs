@@ -29,7 +29,7 @@ try {
   writeFileSync(target, readFileSync(logicSrc, "utf-8"));
   const L = await import(pathToFileURL(target).href);
 
-  // ---- fmtPct: decimals, the comma, the <0.1 rule ----
+  // ---- fmtPct: decimals, the comma, the <0.1 rule, and the 9.96 -> 10 rounding ----
   assert.equal(L.fmtPct(53, "es"), "53 %");
   assert.equal(L.fmtPct(53, "en"), "53%");
   assert.equal(L.fmtPct(3.2, "es"), "3,2 %");
@@ -40,7 +40,34 @@ try {
   assert.equal(L.fmtPct(0.05, "es"), "<0,1 %");
   assert.equal(L.fmtPct(0.05, "en"), "<0.1%");
   assert.equal(L.fmtPct(9.5, "en"), "9.5%");
+  assert.equal(L.fmtPct(9.96, "en"), "10%");   // rounded to 1 decimal first, not "10.0%"
+  assert.equal(L.fmtPct(9.96, "es"), "10 %");
   assert.equal(L.fmtPct(null, "en"), "—");
+
+  // ---- money formats (item 15) and localisation (item 14) ----
+  assert.equal(L.usd(12.4, "es"), "12,40 $");
+  assert.equal(L.usd(12.4, "en"), "$12.40");
+  assert.equal(L.usdInt(1535, "es"), "1535 $");
+  assert.equal(L.usdInt(1535, "en"), "$1535");
+  assert.equal(L.approxUsd(18, "es"), "~18 $");
+  assert.equal(L.approxUsd(18, "en"), "~$18");
+  assert.equal(L.approxUsd(0.07, "es"), "~0,07 $");
+  assert.equal(L.approxUsd(0.07, "en"), "~$0.07");
+  assert.equal(L.approxUsd(9.99, "en"), "~$9.99");
+  assert.equal(L.fmtTokens(1200000, "es"), "1,2M");
+  assert.equal(L.fmtTokens(1200000, "en"), "1.2M");
+  assert.equal(L.fmtTokens(500000, "es"), "500k");
+  assert.equal(L.cacheLeft({ cache_expires_at: 100 }, 200, "es"), "caducada");
+  assert.equal(L.cacheLeft({ cache_expires_at: 100 }, 200, "en"), "expired");
+  assert.equal(L.cacheLeft({ cache_expires_at: 200 + 42 * 60 }, 200, "es"), "42 min");
+
+  // ---- ppcUsable: only a finite number > 0 lets the % form run ----
+  assert.equal(L.ppcUsable(8.85), true);
+  assert.equal(L.ppcUsable(0), false);
+  assert.equal(L.ppcUsable(null), false);
+  assert.equal(L.ppcUsable("8.85"), false);
+  assert.equal(L.ppcUsable(NaN), false);
+  assert.equal(L.ppcUsable(-1), false);
 
   // ---- dddHHMM ----
   const R = 1_800_000_000;
@@ -77,7 +104,7 @@ try {
   assert.equal(none.state, "none");
   assert.equal(none.tail, "se reinicia el " + expectDdd(R, "es"));
 
-  // ---- buildActions: ordering, the limit, es/en, the null-usd_per_pct fallback ----
+  // ---- buildActions: ordering by rewrite_usd, the limit, es/en, the fallbacks ----
   const now = 1_800_000_000;
   const accounts = [
     { id: "a1", key: "one", seven_day: { usd_per_pct: 10 } },
@@ -103,32 +130,86 @@ try {
   const view = { lang: "en", now, accounts, sessions };
   const acts = L.buildActions(view, 300000);
   assert.equal(acts.length, 3);  // capped at three, and the 42k session is below the hint
-  assert.deepEqual(acts.map((a) => a.session.project), ["api", "big", "shop"]);  // by stake desc
-  assert.deepEqual(acts.map((a) => a.kind), ["resume", "resume", "compact"]);
+  assert.deepEqual(acts.map((a) => a.session.project), ["api", "shop", "big"]);  // by rewrite_usd desc
+  assert.deepEqual(acts.map((a) => a.kind), ["resume", "compact", "resume"]);
   assert.equal(acts[0].line, "Don't resume api (908k, idle 46 h): coming back costs 3.2% of the week · close it or start fresh");
-  assert.equal(acts[1].line, "Don't resume big (400k, idle 1 h): coming back costs ~$1.00 · /clear gives a free handoff");
-  assert.equal(acts[2].line, "/compact now in shop — each turn re-reads 0.8% of the week · cache expires in 12 min");
+  assert.equal(acts[1].line, "/compact now in shop — each turn re-reads 0.8% of the week · cache expires in 12 min");
+  assert.equal(acts[2].line, "Don't resume big (400k, idle 1 h): coming back costs ~$1.00 · on return, /clear gives a free handoff");
 
   const viewEs = { lang: "es", now, accounts, sessions };
   const actsEs = L.buildActions(viewEs, 300000);
   assert.equal(actsEs[0].line, "No retomes api (908k, parada 46 h): volver cuesta 3,2 % de la semana · ciérrala o empieza de nuevo");
-  assert.equal(actsEs[1].line, "No retomes big (400k, parada 1 h): volver cuesta ~1,00 $ · /clear da un traspaso gratis");
+  assert.equal(actsEs[1].line, "/compact ahora en shop — cada turno relee 0,8 % de la semana · caduca en 12 min");
+  assert.equal(actsEs[2].line, "No retomes big (400k, parada 1 h): volver cuesta ~1,00 $ · al volver, /clear da un traspaso gratis");
 
-  // ---- buildSyncPayload ----
+  // ---- a clear_handoff of the string "false" is not true -> the no-handoff ending ----
+  const stringFalse = L.buildActions({ lang: "en", now, accounts,
+    sessions: [{ pid: 1, session_id: "s1", project: "api", account_id: "a1", context_tokens: 400000,
+      last_activity: now - 3600, cache_expires_at: now - 100, rewrite_usd: 10, clear_handoff: "false" }] }, 300000);
+  assert.equal(stringFalse[0].line,
+    "Don't resume api (400k, idle 1 h): coming back costs 1.0% of the week · close it or start fresh");
+
+  // ---- the missing-fields fixture: an older CLI with no new fields must degrade, not throw ----
+  const bareView = { lang: "en", now,
+    accounts: [{ id: "a1", key: "one", seven_day: { pct: 50 } }],  // no usd_per_pct
+    sessions: [
+      { pid: 1, session_id: "s1", project: "api", account_id: "a1", context_tokens: 400000,
+        last_activity: now - 60, cache_expires_at: now + 720, rewrite_usd: 8 },   // no turn_usd, no clear_handoff
+      { pid: 2, session_id: "s2", project: "shop", account_id: "a1", context_tokens: 500000,
+        last_activity: now - 7200, cache_expires_at: now - 100, rewrite_usd: 9 },  // no usd_per_pct -> dollars
+    ],
+  };
+  const bare = L.buildActions(bareView, 300000);
+  assert.deepEqual(bare.map((a) => a.session.project), ["shop", "api"]);
+  assert.equal(bare[0].line, "Don't resume shop (500k, idle 2 h): coming back costs ~$9.00 · close it or start fresh");
+  assert.equal(bare[1].line, "/compact now in api — cache expires in 12 min");  // no turn_usd: the per-turn clause is dropped
+
+  // ---- buildSyncPayload: valid, empty, corrupt -> null, oversized -> {error} ----
   assert.equal(L.buildSyncPayload(null, []), null);
   assert.equal(L.buildSyncPayload({ groups: "x" }, []), null);
   assert.equal(L.buildSyncPayload({ groups: [], spaces: null }, []), null);
+  // a group entry without a string/number id is corrupt -> null (not an empty feed)
+  assert.equal(L.buildSyncPayload({ groups: [{ name: "Acme" }], spaces: {} }, []), null);
+  // a space pointing at a group id that does not exist is corrupt -> null
+  assert.equal(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "ghost" } },
+    [{ id: "sp1", folder: "/home/you/a", machine: false }]), null);
+  // a local space with a non-absolute folder is corrupt -> null
+  assert.equal(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
+    [{ id: "sp1", folder: "relative/path", machine: false }]), null);
+
   const payload = L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }, { id: "globex", name: "Globex" }],
-      spaces: { sp1: "acme", sp2: "acme", sp3: "globex" } },
+      spaces: { sp1: "acme", sp3: "globex" } },
     [{ id: "sp1", folder: "/home/you/a", machine: false },
-     { id: "sp2", folder: "relative/path", machine: false },   // not absolute: skipped
      { id: "sp3", folder: "C:\\work\\g", machine: false },
      { id: "sp4", folder: "/home/you/remote", machine: true }], // remote machine: skipped
   );
   assert.deepEqual(payload, { groups: [{ name: "Acme", folders: ["/home/you/a"] },
                                         { name: "Globex", folders: ["C:\\work\\g"] }] });
   assert.deepEqual(L.buildSyncPayload({ groups: [], spaces: {} }, []), { groups: [] });
+
+  // ---- oversized payloads: reported (error code), never truncated ----
+  const manyGroups = [], manyGroupSpaces = {}, manyGroupList = [];
+  for (let i = 0; i < 201; i++) {
+    manyGroups.push({ id: "g" + i, name: "G" + i });
+    manyGroupSpaces["sp" + i] = "g" + i;
+    manyGroupList.push({ id: "sp" + i, folder: "/f" + i, machine: false });
+  }
+  assert.deepEqual(L.buildSyncPayload({ groups: manyGroups, spaces: manyGroupSpaces }, manyGroupList), { error: "groups" });
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "A".repeat(101) }], spaces: { sp1: "acme" } },
+    [{ id: "sp1", folder: "/x", machine: false }]), { error: "name" });
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
+    [{ id: "sp1", folder: "/" + "x".repeat(4096), machine: false }]), { error: "path" });
+  const manyFolders = Array.from({ length: 1001 }, (_, i) => "/f" + i);
+  const manySpaces = {};
+  manyFolders.forEach((f, i) => { manySpaces["sp" + i] = "acme"; });
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: manySpaces },
+    manyFolders.map((f, i) => ({ id: "sp" + i, folder: f, machine: false }))), { error: "folders" });
 
   console.log("logic.js ok");
 } finally {

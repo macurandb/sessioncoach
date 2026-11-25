@@ -5,6 +5,11 @@ programs kept in `<app home>/mods/<name>/`. This module copies sessioncoach's pa
 `<app home>/mods/sessioncoach/`, writes the `config.json` it reads, and records each shipped file's
 sha256 in a manifest so a later run can tell a user's edit from an update.
 
+The panel it installs runs `sessioncoach live --json` to show a decision view over the running
+Claude Code sessions (am I OK this week, what should I do now), writes the `.groups-sync.json`
+staging file and runs `sessioncoach group sync-herdr` on it (which edits `projects.json`), and keeps
+its state in two shared keys (`sessioncoach.toasted`, `sessioncoach.folded`).
+
 Nothing is touched outside that one folder; the panel itself only ever runs
 `sessioncoach live --json` locally (see docs/herdr.md).
 """

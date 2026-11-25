@@ -15,7 +15,7 @@ removal or a change of meaning bumps the version):
                  "seven_day": {"pct": 47.0, "resets_at": 1795737600}},
       "sessions": [
         {"pid": 30313, "session_id": "...", "cwd": "/abs/path", "project": "label", "status": "busy",
-         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "pretty",
+         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "acme",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": 1795530900,
          "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70,
          "today_usd": 12.40, "source": "transcript", "match": "pid"}
@@ -27,7 +27,7 @@ removal or a change of meaning bumps the version):
                        "projected_pct": 78.0}}
       ],
       "groups": [
-        {"id": "pretty", "label": "Pretty", "today_usd": 10.0, "five_hour_usd": 6.0,
+        {"id": "acme", "label": "Acme", "today_usd": 10.0, "five_hour_usd": 6.0,
          "week_usd": 900.0, "sessions": 1}
       ],
       "events": [
@@ -52,7 +52,7 @@ import re
 import sqlite3
 import time
 
-from . import accounts, alertlog, config, cost, limits, paths, pricing, projects, resume, store
+from . import accounts, alertlog, config, cost, idleguard, limits, paths, pricing, projects, resume, store
 from .collect import encode_dir
 from .projects import UNASSIGNED, Labeler
 
@@ -176,6 +176,18 @@ def _int_or_none(v):
         return None
 
 
+def _valid_pct(v):
+    """A plan-limit sample percentage: an int/float (not bool), finite and 0..100. Anything else
+    (text, JSON-ish text, NaN/inf, bool, negatives, over 100) is not a percentage `live` can use."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and 0 <= v <= 100)
+
+
+def _valid_epoch(v):
+    """A plan-limit sample timestamp: a finite, positive number (an epoch second)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+
+
 def _ttl(u):
     """The cache lifetime a usage wrote with, via `pricing.cache_ttl_s` on a normalised row: the
     transcript's usage becomes the request columns pricing already understands, so the null-
@@ -261,7 +273,9 @@ def _apply_info(s, info):
     s["cache_ttl_s"] = info["ttl"]
     s["cache_expires_at"] = info["ts"] + info["ttl"] if info["ts"] is not None else None
     if info.get("model") and info.get("context") is not None:
-        prices = pricing.price(info["model"])
+        prices, _exact, key = pricing.price_info(info["model"])
+        if info["context"] > pricing.LONG_PROMPT and key in pricing.LONG_PRICES:
+            prices = pricing.LONG_PRICES[key]  # a long prompt pays the long-prompt tier, as _agg_weight does
         s["rewrite_usd"] = round(info["context"] * prices[3] / 1e6, 2)  # re-writing after expiry
         s["turn_usd"] = round(info["context"] * prices[2] / 1e6, 2)  # each further turn re-reads this
 
@@ -284,7 +298,8 @@ def _live_sessions(con=None, labeler=None):
     labeler = labeler or Labeler.load()
     roots = paths.transcript_roots()
     out = []
-    handoff = {}  # cwd -> resume.active_for(cwd), computed once per distinct cwd
+    handoff = {}  # (cfg_dir, cwd) -> resume.active_for(cwd, cfg_dir), computed once per distinct pair
+    idle_guard = idleguard.enabled()  # once per view: a free handoff needs the idle guard on as well
     for cfg in _config_dirs():
         sdir = os.path.join(cfg, "sessions")
         for path in sorted(glob.glob(os.path.join(sdir, "*.json"))):
@@ -331,9 +346,10 @@ def _live_sessions(con=None, labeler=None):
                     s["source"] = "metrics"
                     _apply_info(s, req)
             if cwd:
-                if cwd not in handoff:
-                    handoff[cwd] = resume.active_for(cwd)
-                s["clear_handoff"] = handoff[cwd]
+                key = (cfg, cwd)
+                if key not in handoff:
+                    handoff[key] = resume.active_for(cwd, cfg_dir=cfg)
+                s["clear_handoff"] = handoff[key] and idle_guard
             out.append(s)
     out.sort(key=lambda s: -(s["last_activity"] or 0))
     return out
@@ -460,13 +476,17 @@ def _login_since(con, root, tables):
 
 def _latest_sample(con, root, window, now, since=None):
     """One root's latest non-null sample of `window` in the last 6 h (and since `since`), as `_limits`
-    does but by root. `ts` is returned too so `usd_per_pct` can span the two samples."""
+    does but by root. `ts` is returned too so `usd_per_pct` can span the two samples. A sample whose
+    `pct` or `reset` is not a usable number is treated as missing (a corrupt row must never leak into
+    arithmetic or the output)."""
     pct, reset = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
     row = con.execute("SELECT ts, %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND root IS ? "
                       "AND ts >= ? ORDER BY ts DESC LIMIT 1" % (pct, reset, pct),
                       (root, max(now - LIMITS_STALE_S, since or 0))).fetchone()
-    return {"ts": row["ts"] if row else None, "pct": row["pct"] if row else None,
-            "reset": row["reset"] if row else None}
+    pct_v, reset_v, ts_v = (row["pct"], row["reset"], row["ts"]) if row else (None, None, None)
+    return {"ts": ts_v if _valid_epoch(ts_v) else None,
+            "pct": pct_v if _valid_pct(pct_v) else None,
+            "reset": reset_v if _valid_epoch(reset_v) else None}
 
 
 def _projected_pct(pct, resets_at, now):
@@ -523,22 +543,29 @@ def _usd_per_pct(con, root, window, latest, since=None):
     `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`). Spend is measured
     from the earliest sample of the *current* window — the first with the same `reset`, since the
     login (`since`), not limited to the last 6 h — to the latest: the root's requests with
-    `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a sample is missing, the percentage
-    delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller delta is mostly rounding),
-    or nothing was spent."""
+    `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a sample is missing or unusable, the
+    percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller delta is mostly
+    rounding), nothing was spent, or the rounded result is not > 0. A bad latest sample yields None;
+    a bad earliest sample is skipped for the next valid one."""
     pct_col, reset_col = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
     reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
-    if reset is None or p1 is None or t1 is None:
+    if reset is None or t1 is None or not _valid_pct(p1):
         return None
-    row = con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s IS NOT NULL AND %s = ? "
-                      "AND root IS ? AND ts >= ? ORDER BY ts ASC LIMIT 1"
-                      % (pct_col, reset_col, reset_col), (reset, root, since or 0)).fetchone()
-    if not row or row["pct"] is None or p1 - row["pct"] < MIN_PCT_DELTA:
+    rows = con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s IS NOT NULL AND %s = ? "
+                       "AND root IS ? AND ts >= ? ORDER BY ts ASC"
+                       % (pct_col, pct_col, reset_col), (reset, root, since or 0))
+    row = None
+    for r in rows:
+        if _valid_epoch(r["ts"]) and _valid_pct(r["pct"]):
+            row = r
+            break
+    if row is None or p1 - row["pct"] < MIN_PCT_DELTA:
         return None
     usd = sum(w for _r, _p, w in _window_rows(con, row["ts"], t1, root=root, strict_lo=True))
     if usd <= 0:
         return None
-    return round(usd / (p1 - row["pct"]), 2)
+    value = round(usd / (p1 - row["pct"]), 2)
+    return value if value > 0 else None
 
 
 def _account_groups(five, seven):

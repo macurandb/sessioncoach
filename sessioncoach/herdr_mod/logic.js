@@ -7,11 +7,19 @@ const DAYS = {
   en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
 };
 
+// `group sync-herdr`'s bounds, exactly as sessioncoach/projects.py (MAX_GROUPS, MAX_FOLDERS,
+// MAX_NAME, MAX_PATH). The panel never truncates: a payload past these is reported, not cut.
+const MAX_GROUPS = 200;
+const MAX_FOLDERS = 1000;
+const MAX_NAME = 100;
+const MAX_PATH = 4096;
+
 // ---- number / time formatting ----
 
-export function fmtTokens(n) {
+export function fmtTokens(n, lang) {
   if (n == null) return "—";
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  const es = lang === "es";
+  if (n >= 1000000) return (n / 1000000).toFixed(1).replace(".", es ? "," : ".") + "M";
   return Math.round(n / 1000) + "k";
 }
 
@@ -30,39 +38,50 @@ export function dddHHMM(epoch, lang) {
 }
 
 // A percentage of the week: one decimal under 10, none above ("0,8 %", "3,2 %", "14 %"); under 0.1
-// write "<0,1 %" / "<0.1%". Spanish uses a comma decimal and a space before the percent sign.
+// write "<0,1 %" / "<0.1%". Spanish uses a comma decimal and a space before the percent sign. The
+// under-10 / at-least-10 branch is decided on the value rounded to one decimal, so 9.96 -> "10 %".
 export function fmtPct(pct, lang) {
   const es = lang === "es";
   if (pct == null) return "—";
   const p = Number(pct);
   if (!Number.isFinite(p)) return "—";
   if (p < 0.1) return es ? "<0,1 %" : "<0.1%";
-  if (p < 10) return String(p.toFixed(1)).replace(".", es ? "," : ".") + (es ? " %" : "%");
-  return String(Math.round(p)) + (es ? " %" : "%");
+  const r = Math.round(p * 10) / 10;
+  if (r < 10) return String(r.toFixed(1)).replace(".", es ? "," : ".") + (es ? " %" : "%");
+  return String(Math.round(r)) + (es ? " %" : "%");
 }
 
-export function usd(n) {
+// A precise dollar figure, two decimals ("$12.40" / "12,40 $").
+export function usd(n, lang) {
   if (n == null) return "—";
-  return "$" + Number(n).toFixed(2);
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  const es = lang === "es";
+  return es ? v.toFixed(2).replace(".", ",") + " $" : "$" + v.toFixed(2);
 }
 
 // Whole dollars for the dim summary line: "309 $" / "$309".
 export function usdInt(n, lang) {
   if (n == null) return "—";
+  const es = lang === "es";
   const v = Math.round(Number(n));
-  return lang === "es" ? v + " $" : "$" + v;
+  return es ? v + " $" : "$" + v;
 }
 
-// A rough dollar figure ("~18 $" / "~$18"), two decimals so the small per-turn numbers stay useful.
+// A rough dollar figure: whole units at 10 and above ("~18 $" / "~$18"), two decimals below
+// ("~0,07 $" / "~$0.07"), so the small per-turn numbers stay useful.
 export function approxUsd(n, lang) {
   if (n == null) return "—";
-  const v = Number(n).toFixed(2);
-  return lang === "es" ? "~" + v.replace(".", ",") + " $" : "~$" + v;
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  const es = lang === "es";
+  const text = Math.abs(v) >= 10 ? String(Math.round(v)) : v.toFixed(2).replace(".", es ? "," : ".");
+  return es ? "~" + text + " $" : "~$" + text;
 }
 
-export function cacheLeft(s, now) {
+export function cacheLeft(s, now, lang) {
   if (s.cache_expires_at == null) return "—";
-  if (s.cache_expires_at < now) return "expired";
+  if (s.cache_expires_at < now) return lang === "es" ? "caducada" : "expired";
   return Math.round((s.cache_expires_at - now) / 60) + " min";
 }
 
@@ -74,6 +93,12 @@ export function fmtIdle(secs) {
   const h = Math.floor(secs / 3600);
   if (h < 48) return h + " h";
   return Math.floor(secs / 86400) + " d";
+}
+
+// A usable USD-per-percentage-point: a finite number > 0. Anything else (null, 0, "8.85", NaN,
+// Infinity, negative) means "price unknown", and every consumer falls back to dollars.
+export function ppcUsable(v) {
+  return typeof v === "number" && Number.isFinite(v) && v > 0;
 }
 
 // ---- the verdict (section A) ----
@@ -142,30 +167,33 @@ function actionLine(s, acct, now, es, lang) {
   if (s.cache_expires_at != null && s.cache_expires_at > now) {
     const mins = Math.max(1, Math.round((s.cache_expires_at - now) / 60));
     const expires = es ? ("caduca en " + mins + " min") : ("cache expires in " + mins + " min");
-    if (ppc != null && s.turn_usd != null) {
-      return (es ? "/compact ahora en " : "/compact now in ") + project + " — "
-        + (es ? "cada turno relee " : "each turn re-reads ") + fmtPct(s.turn_usd / ppc, lang)
-        + (es ? " de la semana · " : " of the week · ") + expires;
+    // A per-turn clause only when there is a turn cost to report; a missing turn_usd drops it.
+    let clause = "";
+    if (s.turn_usd != null) {
+      clause = ppcUsable(ppc)
+        ? (es ? "cada turno relee " : "each turn re-reads ") + fmtPct(s.turn_usd / ppc, lang)
+          + (es ? " de la semana" : " of the week")
+        : (es ? "cada turno relee " : "each turn re-reads ") + approxUsd(s.turn_usd, lang);
     }
-    return (es ? "/compact ahora en " : "/compact now in ") + project + " — "
-      + (es ? "cada turno relee " : "each turn re-reads ") + approxUsd(s.turn_usd, lang) + " · " + expires;
+    const sep = clause ? " · " : "";
+    return (es ? "/compact ahora en " : "/compact now in ") + project + " — " + clause + sep + expires;
   }
   const idle = fmtIdle(now - (s.last_activity != null ? s.last_activity : now));
-  const tokens = fmtTokens(s.context_tokens);
-  const end = s.clear_handoff
-    ? (es ? "· /clear da un traspaso gratis" : "· /clear gives a free handoff")
+  const tokens = fmtTokens(s.context_tokens, lang);
+  const end = s.clear_handoff === true
+    ? (es ? "· al volver, /clear da un traspaso gratis" : "· on return, /clear gives a free handoff")
     : (es ? "· ciérrala o empieza de nuevo" : "· close it or start fresh");
   const head = (es ? "No retomes " : "Don't resume ") + project + " (" + tokens + ", "
     + (es ? "parada " : "idle ") + idle + "): " + (es ? "volver cuesta " : "coming back costs ");
-  if (ppc != null && s.rewrite_usd != null) {
+  if (ppcUsable(ppc) && s.rewrite_usd != null) {
     return head + fmtPct(s.rewrite_usd / ppc, lang) + (es ? " de la semana " : " of the week ") + end;
   }
   return head + approxUsd(s.rewrite_usd, lang) + " " + end;
 }
 
-// The "NOW" actions: at most three, the biggest-context sessions first by stake (what returning to
-// them costs as a share of the week, falling back to the raw rewrite dollars), each with its full
-// line. Sessions below `hintMinTokens` are ignored.
+// The "NOW" actions: at most three, the biggest-context sessions first, ordered by rewrite_usd
+// descending (one unit across accounts; within an account that is the same order as the percentage
+// of the week). Sessions below `hintMinTokens` are ignored.
 export function buildActions(view, hintMinTokens) {
   const lang = view && view.lang === "es" ? "es" : "en";
   const es = lang === "es";
@@ -176,10 +204,7 @@ export function buildActions(view, hintMinTokens) {
   for (const s of sessions) {
     if (!s || typeof s !== "object" || Array.isArray(s)) continue;
     if (s.context_tokens == null || s.context_tokens < min) continue;
-    const acct = accountFor(view, s);
-    const ppc = acct && acct.seven_day ? acct.seven_day.usd_per_pct : null;
-    const stake = (ppc != null && s.rewrite_usd != null) ? s.rewrite_usd / ppc
-      : (s.rewrite_usd != null ? s.rewrite_usd : 0);
+    const stake = (s.rewrite_usd != null && Number.isFinite(s.rewrite_usd)) ? s.rewrite_usd : 0;
     rows.push({ session: s, stake });
   }
   rows.sort((a, b) => b.stake - a.stake);
@@ -194,24 +219,30 @@ export function buildActions(view, hintMinTokens) {
 // ---- the group sync (section F) ----
 
 // Build the `group sync-herdr` payload from the herdr-space-groups shared value and the local
-// spaces. Returns null when the shared value is not a usable object (so the caller does nothing);
-// otherwise {groups: [{name, folders}]} — possibly {groups: []} when no group has a local space,
-// which clears every imported assignment. Bad groups/spaces are skipped, never fatal.
+// spaces. Returns null when the shared value is not usable OR the input is corrupt (no sync, so a
+// corrupt input can never become an empty feed that clears every imported rule); `{error: <code>}`
+// when it is valid but exceeds sync-herdr's limits (no sync, the caller shows an error); otherwise
+// `{groups: [{name, folders}]}` — possibly `{groups: []}` when no group has a local space, which
+// clears every imported assignment. Nothing is truncated: an over-limit name, path or count is
+// reported, not silently cut.
 export function buildSyncPayload(spaceGroups, spacesList) {
   if (spaceGroups == null || typeof spaceGroups !== "object" || Array.isArray(spaceGroups)) return null;
   if (!Array.isArray(spaceGroups.groups)) return null;
   if (spaceGroups.spaces == null || typeof spaceGroups.spaces !== "object" || Array.isArray(spaceGroups.spaces)) return null;
   const byId = new Map();
   for (const g of spaceGroups.groups) {
-    if (g && typeof g === "object" && !Array.isArray(g) && g.id != null) byId.set(String(g.id), g);
+    if (!g || typeof g !== "object" || Array.isArray(g)) return null;          // every group entry must be an object
+    if (typeof g.id !== "string" && typeof g.id !== "number") return null;     // ... with a string/number id
+    byId.set(String(g.id), g);
   }
   const folders = new Map();
   for (const sp of Array.isArray(spacesList) ? spacesList : []) {
     if (!sp || typeof sp !== "object") continue;
     if (sp.machine) continue;  // local machine only
     const gid = spaceGroups.spaces[sp.id];
-    // sync-herdr rejects the whole feed for one bad folder: send absolute paths only (POSIX or a drive)
-    if (gid == null || typeof sp.folder !== "string" || !/^(\/|[A-Za-z]:[\\/])/.test(sp.folder)) continue;
+    if (gid == null) continue;                                   // a space assigned to no group
+    if (!byId.has(String(gid))) return null;                     // ... to a group id that does not exist
+    if (typeof sp.folder !== "string" || !/^(\/|[A-Za-z]:[\\/])/.test(sp.folder)) return null;  // a local space needs an absolute folder
     const key = String(gid);
     if (!folders.has(key)) folders.set(key, []);
     folders.get(key).push(sp.folder);
@@ -221,7 +252,13 @@ export function buildSyncPayload(spaceGroups, spacesList) {
     const fs = folders.get(gid);
     if (!fs || !fs.length) continue;
     const name = (g && typeof g.name === "string" && g.name.trim()) || gid;
-    groups.push({ name: name.slice(0, 100), folders: fs.slice(0, 1000) });  // sync-herdr's limits
+    groups.push({ name: String(name), folders: fs });
+  }
+  if (groups.length > MAX_GROUPS) return { error: "groups" };
+  for (const g of groups) {
+    if (g.name.length > MAX_NAME) return { error: "name" };
+    if (g.folders.length > MAX_FOLDERS) return { error: "folders" };
+    for (const f of g.folders) if (f.length > MAX_PATH) return { error: "path" };
   }
   return { groups };
 }

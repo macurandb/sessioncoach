@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -368,6 +369,16 @@ class PackageData(unittest.TestCase):
             text = fh.read()
         for name in herdr.MOD_FILES:  # listed by name: `herdr-app check` writes other files there
             self.assertIn('"herdr_mod/%s"' % name, text, "pyproject.toml package-data must ship %s" % name)
+
+    def test_staging_path_agrees_with_herdr_sync_file(self):
+        # the panel stages its payload at appHome() + SYNC_FILE; herdr.py removes SYNC_FILE on
+        # uninstall, so the two constants must name the same file inside the mod folder.
+        pkg = os.path.dirname(os.path.abspath(_pkg_init))
+        with open(os.path.join(pkg, "herdr_mod", "main.js"), encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r'SYNC_FILE\s*=\s*"([^"]+)"', text)
+        self.assertIsNotNone(m, "main.js must define the SYNC_FILE constant")
+        self.assertEqual(m.group(1), "/mods/sessioncoach/" + herdr.SYNC_FILE)
 
 
 if __name__ == "__main__":

@@ -14,15 +14,17 @@ Top to bottom:
   track` — with a verdict mark in the theme colours: red `✗ hits 100% Wed 14:00` when the current
   pace hits the limit before it resets, amber `≈ tight` when the projection reaches 90 %, green
   `✓ on track` otherwise, and no mark (`Week 53% · resets Thu 21:00`) when there is no projection
-  yet. Under it, the 5-hour line — `5 h 12% · resets 13:30`, or `5 h 12% · ✗ 100% at 12:10` in red
-  when the 5-hour pace is too fast — and a dim dollars line (`$1535 this week · $13 today`).
-- **NOW.** At most three actions, the biggest-context sessions first by what returning to them
-  costs as a share of the week: `/compact now in <project> — each turn re-reads 0.8% of the week ·
-  cache expires in 12 min` while the cache is alive, or `Don't resume <project> (908k, idle 46 h):
-  coming back costs 3.2% of the week · /clear gives a free handoff` once it has expired. When the
-  account has no price-per-point, the same advice in dollars (`costs ~$18`); when the automatic
-  handoff is not available, the promise becomes `· close it or start fresh`. Click a row to focus
-  its terminal. With nothing to do, one dim line `Nothing urgent`.
+  yet. Under it, the 5-hour line — `5 h 12% · ✗ 100% at 12:10 · resets 13:30` (the red hit time and
+  the reset time together) when the 5-hour pace is too fast, or just `5 h 12% · resets 13:30` — and
+  a dim dollars line (`$1535 this week · $13 today`).
+- **NOW.** At most three actions, the biggest-context sessions first by their rewrite cost:
+  `/compact now in <project> — each turn re-reads 0.8% of the week · cache expires in 12 min` while
+  the cache is alive (the per-turn clause is dropped when the turn cost is unknown), or `Don't
+  resume <project> (908k, idle 46 h): coming back costs 3.2% of the week · on return, /clear gives
+  a free handoff` once it has expired. When the account has no price-per-point, the same advice in
+  dollars (`costs ~$18`); when the automatic handoff is not available, the promise becomes `· close
+  it or start fresh`. Click a row to focus its terminal. With nothing to do, one dim line
+  `Nothing urgent`.
 - **Clients.** Folded by default: one row per client of the current login (the account with the
   most sessions), `label · week % · 5 h %`, from the account's own window spend — so the rows add
   up to the verdict's windows, never mixed across accounts.

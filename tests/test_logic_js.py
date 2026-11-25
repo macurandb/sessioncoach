@@ -19,7 +19,7 @@ HARNESS = os.path.join(REPO, "tests", "js", "test_logic.mjs")
 @unittest.skipUnless(shutil.which("node"), "node not installed")
 class LogicJs(unittest.TestCase):
     def test_logic_js_harness_passes(self):
-        result = subprocess.run([shutil.which("node"), HARNESS], capture_output=True, text=True, check=False)
+        result = subprocess.run([shutil.which("node"), HARNESS], capture_output=True, text=True, check=False, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("logic.js ok", result.stdout)
 

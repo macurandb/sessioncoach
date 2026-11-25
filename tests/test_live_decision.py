@@ -2,8 +2,10 @@
 demo data. Everything runs on a temp HOME and data dir; the metrics database is built by hand so the
 sample spans, the login switch, window resets and per-tenant sums are checked exactly."""
 import datetime as dt
+import glob
 import json
 import os
+import re
 import unittest
 from unittest import mock
 
@@ -23,6 +25,10 @@ class Base(unittest.TestCase):
         self.home = isolate.claude_home(self)
         self.data = os.path.join(self.home, ".sessioncoach")
         os.makedirs(self.data, exist_ok=True)
+        # the view opens paths.db_path(), so pin the data dir explicitly (and drop the legacy
+        # KIT_DATA_DIR a shell may still carry) instead of relying on the HOME fallback.
+        os.environ["SESSIONCOACH_DATA_DIR"] = self.data
+        os.environ.pop("KIT_DATA_DIR", None)
         self.db = os.path.join(self.data, "metrics.db")
         self.ra = os.path.join(self.home, "acct-a", "projects")
         os.makedirs(os.path.join(os.path.dirname(self.ra), "sessions"))
@@ -57,6 +63,17 @@ class Base(unittest.TestCase):
         store.add_request(con, {"project_dir": project_dir, "file": "f.jsonl", "msg_id": "m%d" % ts,
                                 "request_id": "r%d" % ts, "session_id": "s", "kind": "main",
                                 "ts": iso(ts), "model": model, "input": input, "output": 0,
+                                "cache_read": 0, "cache_write": 0, "cache_write_5m": 0,
+                                "cache_write_1h": 0, "root": root})
+
+    def iso_at(self, epoch_s, micros=0):
+        """An ISO ts at `epoch_s` plus `micros`, at millisecond precision, as the transcript rows use."""
+        return dt.datetime.fromtimestamp(epoch_s + micros / 1e6, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    def request_ts(self, con, root, ts, project_dir="-a", model="claude-opus-5-5", input=250000):
+        store.add_request(con, {"project_dir": project_dir, "file": "f.jsonl", "msg_id": "m-%s" % ts,
+                                "request_id": "r-%s" % ts, "session_id": "s", "kind": "main",
+                                "ts": ts, "model": model, "input": input, "output": 0,
                                 "cache_read": 0, "cache_write": 0, "cache_write_5m": 0,
                                 "cache_write_1h": 0, "root": root})
 
@@ -108,6 +125,59 @@ class UsdPerPct(Base):
         con.commit()
         self.assertIsNone(self.view()["accounts"][0]["seven_day"]["usd_per_pct"])  # no requests -> no spend
 
+    def test_five_hour_window(self):
+        con = self.connect()
+        five_reset = NOW + 3600
+        self.sample(con, self.ra, NOW - 3600, five_pct=10.0, five_reset=five_reset)
+        self.request(con, self.ra, NOW - 1800)  # $1.00
+        self.sample(con, self.ra, NOW - 60, five_pct=40.0, five_reset=five_reset)
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertAlmostEqual(a["five_hour"]["usd_per_pct"], 0.03, places=2)  # $1 / 30 points
+
+    def test_single_sample_is_null(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        self.sample(con, self.ra, NOW - 60, seven_pct=40.0, seven_reset=seven_reset)
+        self.request(con, self.ra, NOW - 1800)  # $1, but there is no earlier sample to span
+        con.commit()
+        self.assertIsNone(self.view()["accounts"][0]["seven_day"]["usd_per_pct"])
+
+    def test_strict_lo_at_millisecond_precision(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        t0 = NOW - 3600
+        self.sample(con, self.ra, t0, seven_pct=10.0, seven_reset=seven_reset)
+        self.sample(con, self.ra, NOW - 60, seven_pct=40.0, seven_reset=seven_reset)
+        self.request_ts(con, self.ra, self.iso_at(t0))          # exactly at t0: excluded (strict lo)
+        self.request_ts(con, self.ra, self.iso_at(t0, 1000))    # t0 + 1 ms: included
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertAlmostEqual(a["seven_day"]["usd_per_pct"], 0.03, places=2)  # $1, not $2
+
+    def test_a_bad_earliest_sample_is_skipped(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        self.sample(con, self.ra, NOW - 7200, seven_pct="50%", seven_reset=seven_reset)  # bad: skipped
+        self.sample(con, self.ra, NOW - 3600, seven_pct=10.0, seven_reset=seven_reset)   # earliest valid
+        self.request(con, self.ra, NOW - 1800)  # $1 between t0 and t1
+        self.sample(con, self.ra, NOW - 60, seven_pct=40.0, seven_reset=seven_reset)
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertAlmostEqual(a["seven_day"]["usd_per_pct"], 0.03, places=2)  # from 10 %, not the bad row
+
+    def test_bad_sample_values_do_not_raise(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        self.sample(con, self.ra, NOW - 3600, seven_pct=10.0, seven_reset=seven_reset)
+        self.request(con, self.ra, NOW - 1800)  # $1
+        for bad in ("50%", '{"pct": 50}', float("inf"), float("nan"), True):
+            con.execute("INSERT INTO limits_samples (ts, session_id, root, seven_pct, seven_reset) "
+                        "VALUES (?,?,?,?,?)", (NOW - 60, None, self.ra, bad, seven_reset))
+        con.commit()
+        a = self.view()["accounts"][0]  # must not raise
+        self.assertIsNone(a["seven_day"]["usd_per_pct"])  # a bad latest -> null
+
 
 class TurnUsd(unittest.TestCase):
     def _session(self):
@@ -125,6 +195,13 @@ class TurnUsd(unittest.TestCase):
         live._apply_info(s, {"model": None, "context": 335000, "ts": NOW, "ttl": 3600})
         self.assertIsNone(s["turn_usd"])
         self.assertIsNone(s["rewrite_usd"])
+
+    def test_turn_usd_long_prompt_tier(self):
+        s = self._session()
+        live._apply_info(s, {"model": "claude-haiku-5-5", "context": 200000, "ts": NOW, "ttl": 3600})
+        # haiku-5-5 above LONG_PROMPT pays the long-prompt tier: cache read 0.05, cache write 1.0
+        self.assertAlmostEqual(s["turn_usd"], 0.01, places=2)     # 200000 x 0.05 / 1e6
+        self.assertAlmostEqual(s["rewrite_usd"], 0.20, places=2)  # 200000 x 1.0 / 1e6
 
 
 class AccountGroups(Base):
@@ -168,7 +245,7 @@ class AccountGroups(Base):
 
 
 class ClearHandoff(Base):
-    def test_clear_handoff_reflects_resume_and_is_cached_per_cwd(self):
+    def test_clear_handoff_reflects_resume_and_idle_guard_per_cfg_and_cwd(self):
         cfg = os.path.dirname(self.ra)
         sdir = os.path.join(cfg, "sessions")
         for pid, sid, cwd in ((1001, "a", "/x/shared"), (1002, "b", "/x/shared"), (1003, "c", "/x/other")):
@@ -176,16 +253,28 @@ class ClearHandoff(Base):
                 json.dump({"pid": pid, "sessionId": sid, "cwd": cwd, "status": "busy"}, fh)
         seen = []
 
-        def fake_active(cwd):
-            seen.append(cwd)
+        def fake_active(cwd, cfg_dir=None):
+            seen.append((cfg_dir, cwd))
             return cwd == "/x/shared"
 
-        with mock.patch.object(live.resume, "active_for", side_effect=fake_active):
+        with mock.patch.object(live.resume, "active_for", side_effect=fake_active), \
+                mock.patch.object(live.idleguard, "enabled", return_value=True):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertTrue(sessions["a"]["clear_handoff"])
         self.assertTrue(sessions["b"]["clear_handoff"])
         self.assertFalse(sessions["c"]["clear_handoff"])
-        self.assertEqual(sorted(seen), ["/x/other", "/x/shared"])  # once per distinct cwd
+        # once per distinct (config dir, cwd); every session here shares the one config dir
+        self.assertEqual({cwd for _cfg, cwd in seen}, {"/x/other", "/x/shared"})
+
+    def test_clear_handoff_requires_the_idle_guard(self):
+        cfg = os.path.dirname(self.ra)
+        sdir = os.path.join(cfg, "sessions")
+        with open(os.path.join(sdir, "1001.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1001, "sessionId": "a", "cwd": "/x/shared", "status": "busy"}, fh)
+        with mock.patch.object(live.resume, "active_for", return_value=True), \
+                mock.patch.object(live.idleguard, "enabled", return_value=False):
+            sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
+        self.assertFalse(sessions["a"]["clear_handoff"])  # a resume hook alone is not a free handoff
 
 
 class Demo(unittest.TestCase):
@@ -208,6 +297,29 @@ class Demo(unittest.TestCase):
         blob = json.dumps(v)
         for bad in ("pretty", "daf", "Pretty", "DAF"):
             self.assertNotIn(bad, blob)
+
+
+class NeutralNames(unittest.TestCase):
+    """No real client or project name leaks into the docs, the README or live.py's docstring.
+
+    Word-boundary and case-sensitive: `pretty` and `Pretty` are checked separately, and the
+    capitalised names (Pretty, ITTI, Delfos, NewMe) only match that exact spelling.
+    """
+    WORDS = ("pretty", "Pretty", "phoenix", "kraken", "echo-last", "ITTI", "Delfos", "NewMe")
+
+    def test_no_real_client_names_in_docs_and_live(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        pattern = re.compile(r"\b(" + "|".join(re.escape(w) for w in self.WORDS) + r")\b")
+        files = [os.path.join(root, "README.md"), os.path.join(root, "sessioncoach", "live.py")]
+        files += sorted(glob.glob(os.path.join(root, "docs", "*.md")))
+        hits = []
+        for path in files:
+            with open(path, encoding="utf-8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    m = pattern.search(line)
+                    if m:
+                        hits.append("%s:%d: %r" % (path, lineno, m.group(0)))
+        self.assertEqual(hits, [], "real client names found:\n" + "\n".join(hits))
 
 
 if __name__ == "__main__":

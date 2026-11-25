@@ -133,7 +133,7 @@ One object per tenant that has spend or a running session, ordered by `week_usd`
 `"unassigned"` last:
 
 ```json
-{"id": "pretty", "label": "Pretty", "today_usd": 10.0, "five_hour_usd": 6.0,
+{"id": "acme", "label": "Acme", "today_usd": 10.0, "five_hour_usd": 6.0,
  "week_usd": 900.0, "sessions": 1}
 ```
 
@@ -175,9 +175,12 @@ sessions may be listed there). Each object:
   what returning after expiry re-writes.
 - `turn_usd` — `context_tokens` × the model's cache-read price, list price: what each further turn
   re-reads of that context. `null` when `context_tokens` is `null` (no model/usage read).
-- `clear_handoff` — `true` when `/clear` in this session's working directory would get
-  sessioncoach's automatic handoff (the resume hook is installed for that directory), else
-  `false`. The panel only promises a free handoff when this is `true`.
+- `clear_handoff` — `true` when `/clear` in this session's working directory would really get
+  sessioncoach's automatic handoff: the resume hook is active for that session's config dir **and**
+  the idle guard is on (`alerts.json` → `nudge.block` is true — the flow that holds a prompt back
+  after a pause and hands `/clear` the automatic digest). `false` when either half is missing (a
+  resume hook alone does not promise a free handoff). The panel only promises a free handoff when
+  this is `true`.
 - `today_usd` — the session's recorded cost today (`cost_slices`, the local day), or `null`.
 - `source` — where the numbers came from: `"transcript"` (the transcript tail), `"metrics"`
   (the tail had no usage, so the latest `requests` row was used) or `null` (no numbers
