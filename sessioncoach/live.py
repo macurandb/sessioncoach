@@ -15,19 +15,20 @@ removal or a change of meaning bumps the version):
                  "seven_day": {"pct": 47.0, "resets_at": 1795737600}},
       "sessions": [
         {"pid": 30313, "session_id": "...", "cwd": "/abs/path", "project": "label", "status": "busy",
-         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "pretty",
+         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "acme",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": 1795530900,
-         "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70,
-         "today_usd": 12.40, "source": "transcript", "match": "pid"}
+         "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70, "turn_usd": 0.17,
+         "today_usd": 12.40, "clear_handoff": true, "source": "transcript", "match": "pid"}
       ],
       "accounts": [
         {"id": "1f8ab3c9d0e2", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 12.40, "sessions": 2,
-         "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
-         "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
-                       "projected_pct": 78.0}}
+         "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "usd_per_pct": null, "eta": null},
+         "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "usd_per_pct": 30.1,
+                       "eta": null, "projected_pct": 78.0},
+         "groups": [{"id": "acme", "five_hour_usd": 6.0, "seven_day_usd": 900.0}]}
       ],
       "groups": [
-        {"id": "pretty", "label": "Pretty", "today_usd": 10.0, "five_hour_usd": 6.0,
+        {"id": "acme", "label": "Acme", "today_usd": 10.0, "five_hour_usd": 6.0,
          "week_usd": 900.0, "sessions": 1}
       ],
       "events": [
@@ -36,6 +37,8 @@ removal or a change of meaning bumps the version):
       ],
       "cursor": 1234
     }
+
+Every field is described in docs/live-json.md.
 
 Privacy: from each ``sessions/<pid>.json`` only ``pid``, ``sessionId``, ``cwd``, ``status``,
 ``updatedAt`` and ``procStart`` are read (the ``*.key`` files are never opened). From a
@@ -52,14 +55,15 @@ import re
 import sqlite3
 import time
 
-from . import accounts, alertlog, config, cost, limits, paths, pricing, projects, store
+from . import accounts, alertlog, config, cost, idleguard, limits, nudge, paths, pricing, projects, resume, store
 from .collect import encode_dir
 from .projects import UNASSIGNED, Labeler
 
 VERSION = 1
 TAIL_BYTES = 256 * 1024  # read at most the last 256 KB of a transcript
 DEFAULT_TTL_S = 3600  # the cache lifetime of subscription sessions, when the tail says nothing
-LIMITS_STALE_S = 6 * 3600  # a plan-limit sample older than this is not shown
+LIMITS_STALE_S = limits.LIMITS_STALE_S  # a plan-limit sample older than this is not shown (owned by limits.py)
+MIN_PCT_DELTA = 5  # pct is a whole number: a smaller sample delta is mostly rounding, not real spend
 EVENT_WINDOW_S = 24 * 3600  # without `since`, the newest alerts of the last 24 h
 MAX_EVENTS = 50
 PS_TIMEOUT_S = 2  # how long `ps` may take to answer the process-start check
@@ -259,8 +263,12 @@ def _apply_info(s, info):
     s["last_activity"] = info["ts"]
     s["cache_ttl_s"] = info["ttl"]
     s["cache_expires_at"] = info["ts"] + info["ttl"] if info["ts"] is not None else None
-    if info.get("model"):
-        s["rewrite_usd"] = round(info["context"] * pricing.price(info["model"])[3] / 1e6, 2)
+    if info.get("model") and info.get("context") is not None:
+        prices, _exact, key = pricing.price_info(info["model"])
+        if info["context"] > pricing.LONG_PROMPT and key in pricing.LONG_PRICES:
+            prices = pricing.LONG_PRICES[key]  # a long prompt pays the long-prompt tier, as _agg_weight does
+        s["rewrite_usd"] = round(info["context"] * prices[3] / 1e6, 2)  # re-writing after expiry
+        s["turn_usd"] = round(info["context"] * prices[2] / 1e6, 2)  # each further turn re-reads this
 
 
 def _root_of(tpath, roots):
@@ -281,6 +289,8 @@ def _live_sessions(con=None, labeler=None):
     labeler = labeler or Labeler.load()
     roots = paths.transcript_roots()
     out = []
+    handoff = {}  # (cfg_dir, cwd) -> resume.active_for(cwd, cfg_dir), computed once per distinct pair
+    idle_guard = idleguard.enabled()  # once per view: a free handoff needs the idle guard on as well
     for cfg in _config_dirs():
         sdir = os.path.join(cfg, "sessions")
         for path in sorted(glob.glob(os.path.join(sdir, "*.json"))):
@@ -315,7 +325,8 @@ def _live_sessions(con=None, labeler=None):
                  "status": d.get("status") if isinstance(d.get("status"), str) else None,
                  "model": None, "context_tokens": None, "last_activity": None,
                  "cache_ttl_s": None, "cache_expires_at": None, "rewrite_usd": None,
-                 "today_usd": None, "source": None, "match": "pid",
+                 "turn_usd": None, "today_usd": None, "clear_handoff": False,
+                 "source": None, "match": "pid",
                  "_root": root, "_tenant": tenant, "_account_id": _identity(cfg)}
             if tpath and info:
                 s["source"] = "transcript"
@@ -325,6 +336,13 @@ def _live_sessions(con=None, labeler=None):
                 if req:  # "metrics" only once a row actually supplied the numbers
                     s["source"] = "metrics"
                     _apply_info(s, req)
+            if cwd:
+                key = (cfg, cwd)
+                if key not in handoff:
+                    # the free handoff on return needs both hooks: the prompt hook holds the first prompt
+                    # after the pause back (recording it), the resume hook turns /clear into its digest
+                    handoff[key] = resume.active_for(cwd, cfg_dir=cfg) and nudge.active_for(cwd, cfg_dir=cfg)
+                s["clear_handoff"] = handoff[key] and idle_guard
             out.append(s)
     out.sort(key=lambda s: -(s["last_activity"] or 0))
     return out
@@ -344,13 +362,15 @@ def _today_usd(con, day, session_id):
 
 
 def _limits(con, now):
-    """Each window's latest non-null sample (any session) of the last 6 h, or None when neither has one.
-    A sample can carry one window only, so the newest row alone may leave the other null."""
+    """Each window's current sample (any session) from the last 6 h, or None when neither has one.
+
+    Read through `limits.window_sample`, so a stale redraw (an idle session re-recording an older,
+    lower pct with a fresh ts) can never flap the shown percentage: within one window the real pct
+    only grows, so the MAX over that reset's samples is the truth. A corrupt sample is skipped."""
     out = {}
-    for key, pct, reset in (("five_hour", "five_pct", "five_reset"), ("seven_day", "seven_pct", "seven_reset")):
-        row = con.execute("SELECT %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND ts >= ? "
-                          "ORDER BY ts DESC LIMIT 1" % (pct, reset, pct), (now - LIMITS_STALE_S,)).fetchone()
-        out[key] = {"pct": row["pct"] if row else None, "resets_at": row["reset"] if row else None}
+    for key, window in (("five_hour", "five"), ("seven_day", "seven")):
+        reset, pct, _ts = limits.window_sample(con, window, now=now)
+        out[key] = {"pct": pct, "resets_at": reset}
     if all(v["pct"] is None for v in out.values()):
         return None
     return out
@@ -450,13 +470,11 @@ def _login_since(con, root, tables):
 
 
 def _latest_sample(con, root, window, now, since=None):
-    """One root's latest non-null sample of `window` in the last 6 h (and since `since`), as `_limits`
-    does but by root."""
-    pct, reset = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
-    row = con.execute("SELECT %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND root IS ? "
-                      "AND ts >= ? ORDER BY ts DESC LIMIT 1" % (pct, reset, pct),
-                      (root, max(now - LIMITS_STALE_S, since or 0))).fetchone()
-    return {"pct": row["pct"] if row else None, "reset": row["reset"] if row else None}
+    """One root's current sample of `window`, as `_limits` does but by root: the current window's
+    `reset`, the MAX valid `pct` across its samples (stale redraws cannot flap it) and the `ts` of
+    the earliest sample that reached that max, so `usd_per_pct` can span the two samples."""
+    reset, pct, ts = limits.window_sample(con, window, root=root, since=since, now=now)
+    return {"ts": ts, "pct": pct, "reset": reset}
 
 
 def _projected_pct(pct, resets_at, now):
@@ -480,13 +498,15 @@ def _agg_weight(r):
             + (r["cw1h"] or 0) * pcw1h + (r["cw5"] or 0) * pcw5m) / 1e6
 
 
-def _window_rows(con, start_epoch, now, root=None):
+def _window_rows(con, start_epoch, now, root=None, strict_lo=False):
     """(root, project_dir, weight) for the requests with `start_epoch <= ts <= now` (one root, or
     all), summed in SQL by (root, project_dir, model, long-prompt) and priced in Python: a handful
     of rows, never one per request. `julianday(ts)` compares at millisecond precision, the
     precision of Claude Code's timestamps, so a request even 1 ms after `now` is excluded, and `COALESCE` treats NULL token columns as 0
-    exactly as `pricing.weight` does, so the long-prompt tier and the sums match per-row pricing."""
+    exactly as `pricing.weight` does, so the long-prompt tier and the sums match per-row pricing.
+    `strict_lo` excludes a request exactly at `start_epoch` (for a spend range `t0 < ts <= t1`)."""
     lo, hi = _iso(start_epoch), _iso(now)
+    op = ">" if strict_lo else ">="
     sql = ("SELECT root, project_dir, model, "
            "CASE WHEN COALESCE(input, 0) + COALESCE(cache_read, 0) + COALESCE(cache_write, 0) > ? "
            "THEN 1 ELSE 0 END AS long, "
@@ -496,13 +516,59 @@ def _window_rows(con, start_epoch, now, root=None):
            "ELSE COALESCE(cache_write_1h, 0) END) AS cw1h, "
            "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN 0 "
            "ELSE COALESCE(cache_write_5m, 0) END) AS cw5 "
-           "FROM requests WHERE julianday(ts) >= julianday(?) AND julianday(ts) <= julianday(?)")
+           "FROM requests WHERE julianday(ts) " + op + " julianday(?) AND julianday(ts) <= julianday(?)")
     args = [pricing.LONG_PROMPT, lo, hi]
     if root is not None:
         sql += " AND root IS ?"
         args.append(root)
     sql += " GROUP BY root, project_dir, model, long"
     return [(r["root"], r["project_dir"], _agg_weight(r)) for r in con.execute(sql, args)]
+
+
+def _usd_per_pct(con, root, window, latest, since=None, now=None):
+    """List-price USD one percentage point of `window` costs on `root`, or None.
+
+    `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`): `p1` is the MAX valid
+    pct of the current window (its envelope) and `t1` the earliest sample that reached it, so stale
+    redraws cannot move either. `p0`/`t0` is the first observed point of the same window since the
+    login (`since`), rows of one second collapsed to their max. Spend is the root's requests with
+    `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a value is unusable, `t0` is not
+    before `t1`, the percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller
+    delta is mostly rounding), nothing was spent, or the rounded result is not > 0."""
+    now = int(now if now is not None else time.time())
+    if not isinstance(latest, dict):
+        return None
+    reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
+    if not (limits.valid_epoch(reset, now) and limits.observed(t1, now) and limits.valid_pct(p1)):
+        return None
+    lo = max(since or 0, reset - limits.WINDOW_S[window])
+    points = limits.envelope_points(con, window, reset, lo, t1, now, root=root)
+    if not points:
+        return None
+    t0 = min(points)
+    p0 = points[t0]
+    if not t0 < t1 or p1 - p0 < MIN_PCT_DELTA:
+        return None
+    usd = sum(w for _r, _p, w in _window_rows(con, t0, t1, root=root, strict_lo=True))
+    if usd <= 0:
+        return None
+    value = round(usd / (p1 - p0), 2)
+    return value if value > 0 else None
+
+
+def _account_groups(five, seven):
+    """`accounts[].groups`: an account's window spend per tenant, as `{"id", "five_hour_usd",
+    "seven_day_usd"}` rows, ordered by seven-day spend with `"unassigned"` last and tenants with no
+    spend in either window omitted. The two windows match `five_hour.window_usd` /
+    `seven_day.window_usd`, so the rows add up to them (modulo rounding)."""
+    out = []
+    for tenant in sorted(set(five) | set(seven)):
+        f, s = round(five.get(tenant, 0.0), 2), round(seven.get(tenant, 0.0), 2)
+        if f == 0 and s == 0:
+            continue
+        out.append({"id": tenant, "five_hour_usd": f, "seven_day_usd": s})
+    out.sort(key=lambda g: (g["id"] == UNASSIGNED, -g["seven_day_usd"]))
+    return out
 
 
 def _accounts_groups(con, sessions, now, labeler):
@@ -544,16 +610,33 @@ def _accounts_groups(con, sessions, now, labeler):
 
     # window sums, aggregated in SQL by (root, project_dir, model, long-prompt) and priced in Python
     root_five, root_seven, group_five = {}, {}, {}
+    root_five_tenants, root_seven_tenants = {}, {}  # per-root window spend split by tenant (accounts[].groups)
+    # USD per percentage point, from the window's first point to the earliest sample at its max
+    five_ppc, seven_ppc = {}, {}
     five_resets = {r: samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")}
     seven_resets = {r: samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")}
     global_five_start = min(five_resets.values()) - 5 * 3600 if five_resets else None
     if has_reqs:
         for r, reset in five_resets.items():
             start = max(reset - 5 * 3600, login.get(r, (None,))[0] or 0)
-            root_five[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+            tenants, total = {}, 0.0
+            for _rr, project_dir, w in _window_rows(con, start, now, root=r):
+                total += w
+                tenant = labeler(project_dir)[1]
+                tenants[tenant] = tenants.get(tenant, 0.0) + w
+            root_five[r], root_five_tenants[r] = total, tenants
         for r, reset in seven_resets.items():
             start = max(reset - 7 * 86400, login.get(r, (None,))[0] or 0)
-            root_seven[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+            tenants, total = {}, 0.0
+            for _rr, project_dir, w in _window_rows(con, start, now, root=r):
+                total += w
+                tenant = labeler(project_dir)[1]
+                tenants[tenant] = tenants.get(tenant, 0.0) + w
+            root_seven[r], root_seven_tenants[r] = total, tenants
+        for r in roots:
+            login_epoch = login.get(r, (None,))[0]
+            five_ppc[r] = _usd_per_pct(con, r, "five", samples.get(r, {}).get("five", {}), login_epoch, now)
+            seven_ppc[r] = _usd_per_pct(con, r, "seven", samples.get(r, {}).get("seven", {}), login_epoch, now)
         if global_five_start is not None:
             for _rr, project_dir, w in _window_rows(con, global_five_start, now):
                 tenant = labeler(project_dir)[1]
@@ -573,13 +656,16 @@ def _accounts_groups(con, sessions, now, labeler):
             "sessions": sum(1 for x in sessions if x.get("_root") == root),
             "five_hour": {"pct": f.get("pct"), "resets_at": f.get("reset"),
                           "window_usd": round(root_five[root], 2) if root in root_five else None,
+                          "usd_per_pct": five_ppc.get(root),
                           "eta": limits.pace(con, "five_hour", f["reset"], now, f["pct"], root=root, since=login_epoch)
                           if f.get("reset") and f.get("pct") is not None else None},
             "seven_day": {"pct": s.get("pct"), "resets_at": s.get("reset"),
                           "window_usd": round(root_seven[root], 2) if root in root_seven else None,
+                          "usd_per_pct": seven_ppc.get(root),
                           "eta": limits.pace(con, "seven_day", s["reset"], now, s["pct"], root=root, since=login_epoch)
                           if s.get("reset") and s.get("pct") is not None else None,
                           "projected_pct": _projected_pct(s.get("pct"), s.get("reset"), now)},
+            "groups": _account_groups(root_five_tenants.get(root, {}), root_seven_tenants.get(root, {})),
         })
 
     labels = projects.group_labels()
@@ -669,42 +755,46 @@ def view(now=None, since=None, con=None):
 def demo_view(now=None):
     """A synthetic `view` with the same contract as `view()`, for screenshots and for trying the
     panel without real data (`sessioncoach live --demo`). It reads nothing from disk: three neutral
-    sessions (one past 300k context, one with an expired cache), two accounts, four groups, the plan
-    limits at 22/47 and two events."""
+    sessions (one big with a live cache, one big with an expired cache), two accounts (one with a
+    `usd_per_pct`, one without), per-account `groups`, four groups, the plan limits at 22/47 and two
+    events. Client names stay neutral (acme, globex, initech)."""
     now = int(now if now is not None else time.time())
     sessions = [
         {"pid": 4242, "session_id": "demo-shop", "cwd": "/home/you/shop", "project": "shop", "status": "busy",
-         "account": "personal", "account_id": "000000000001", "group": "pretty",
+         "account": "personal", "account_id": "000000000001", "group": "acme",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": now - 60,
-         "cache_ttl_s": 3600, "cache_expires_at": now - 60 + 3600, "rewrite_usd": 2.68,
-         "today_usd": 12.40, "source": "transcript", "match": "pid"},
+         "cache_ttl_s": 3600, "cache_expires_at": now - 60 + 3600, "rewrite_usd": 2.68, "turn_usd": 0.07,
+         "today_usd": 12.40, "clear_handoff": True, "source": "transcript", "match": "pid"},
         {"pid": 4243, "session_id": "demo-api", "cwd": "/home/you/api", "project": "api", "status": "busy",
          "account": "team", "account_id": "000000000002", "group": "globex",
-         "model": "claude-sonnet-5-5", "context_tokens": 120000, "last_activity": now - 7200,
-         "cache_ttl_s": 3600, "cache_expires_at": now - 7200 + 3600, "rewrite_usd": 0.40,
-         "today_usd": 3.10, "source": "transcript", "match": "pid"},
+         "model": "claude-sonnet-5-5", "context_tokens": 908000, "last_activity": now - 46 * 3600,
+         "cache_ttl_s": 3600, "cache_expires_at": now - 46 * 3600 + 3600, "rewrite_usd": 3.63, "turn_usd": 0.09,
+         "today_usd": 3.10, "clear_handoff": False, "source": "transcript", "match": "pid"},
         {"pid": 4244, "session_id": "demo-docs", "cwd": "/home/you/docs", "project": "docs", "status": "idle",
          "account": "personal", "account_id": "000000000001", "group": "unassigned",
          "model": "claude-haiku-5-5", "context_tokens": 42000, "last_activity": now - 1500,
-         "cache_ttl_s": 3600, "cache_expires_at": now - 1500 + 3600, "rewrite_usd": 0.04,
-         "today_usd": 0.80, "source": "transcript", "match": "pid"},
+         "cache_ttl_s": 3600, "cache_expires_at": now - 1500 + 3600, "rewrite_usd": 0.01, "turn_usd": 0.0,
+         "today_usd": 0.80, "clear_handoff": True, "source": "transcript", "match": "pid"},
     ]
     limits = {"five_hour": {"pct": 22.0, "resets_at": now + 3600},
               "seven_day": {"pct": 47.0, "resets_at": now + 2 * 86400}}
     accounts = [
         {"id": "000000000001", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 13.20, "sessions": 2,
-         "five_hour": {"pct": 12.0, "resets_at": now + 3600, "window_usd": 18.0, "eta": None},
-         "seven_day": {"pct": 51.0, "resets_at": now + 2 * 86400, "window_usd": 1535.0, "eta": None,
-                       "projected_pct": 78.0}},
+         "five_hour": {"pct": 12.0, "resets_at": now + 3600, "window_usd": 18.0, "usd_per_pct": 1.5, "eta": None},
+         "seven_day": {"pct": 51.0, "resets_at": now + 2 * 86400, "window_usd": 1535.0, "usd_per_pct": 30.1,
+                       "eta": None, "projected_pct": 78.0},
+         "groups": [{"id": "acme", "five_hour_usd": 17.2, "seven_day_usd": 1455.0},
+                    {"id": "unassigned", "five_hour_usd": 0.8, "seven_day_usd": 80.0}]},
         {"id": "000000000002", "key": "team", "label": "Team", "plan": "Team", "today_usd": 3.10, "sessions": 1,
-         "five_hour": {"pct": 3.0, "resets_at": now + 5400, "window_usd": 4.0, "eta": None},
-         "seven_day": {"pct": 20.0, "resets_at": now + 86400, "window_usd": 300.0, "eta": None,
-                       "projected_pct": 35.0}},
+         "five_hour": {"pct": 3.0, "resets_at": now + 5400, "window_usd": 4.0, "usd_per_pct": None, "eta": None},
+         "seven_day": {"pct": 20.0, "resets_at": now + 86400, "window_usd": 300.0, "usd_per_pct": None,
+                       "eta": None, "projected_pct": 35.0},
+         "groups": [{"id": "globex", "five_hour_usd": 4.0, "seven_day_usd": 300.0}]},
     ]
     groups = [
-        {"id": "pretty", "label": "Pretty", "today_usd": 12.40, "five_hour_usd": 12.40, "week_usd": 900.0, "sessions": 1},
+        {"id": "acme", "label": "Acme", "today_usd": 12.40, "five_hour_usd": 12.40, "week_usd": 900.0, "sessions": 1},
         {"id": "globex", "label": "Globex", "today_usd": 3.10, "five_hour_usd": 3.10, "week_usd": 500.0, "sessions": 1},
-        {"id": "daf", "label": "DAF", "today_usd": 0.0, "five_hour_usd": 0.0, "week_usd": 300.0, "sessions": 0},
+        {"id": "initech", "label": "Initech", "today_usd": 0.0, "five_hour_usd": 0.0, "week_usd": 300.0, "sessions": 0},
         {"id": "unassigned", "label": "unassigned", "today_usd": 0.80, "five_hour_usd": 0.80, "week_usd": 80.0, "sessions": 1},
     ]
     events = [

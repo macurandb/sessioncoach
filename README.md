@@ -93,9 +93,9 @@ daily review arrives on weekdays at 08:00. When you want detail:
 
 ## Herdr panel
 
-If you use [Herdr](https://herdr.dev), `sessioncoach herdr-install` adds a small panel that shows the
-Claude sessions running right now — their context, cache expiry and new alerts — from `sessioncoach
-live --json`. See [docs/herdr.md](docs/herdr.md).
+If you use [Herdr](https://herdr.dev), `sessioncoach herdr-install` adds a small panel that turns the
+running Claude sessions into a decision view — am I OK this week, and what should I do right now — from
+`sessioncoach live --json`. See [docs/herdr.md](docs/herdr.md).
 
 ## Uninstall
 
@@ -150,7 +150,7 @@ undo it.
 | `idle-compact` | Whether CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS pays off lowered to 100k or raised to 400k for you, and whether it is set right. |
 | `dashboard` | Cost, causes and recommendations at a glance, in your browser (local only). |
 | `demo` | Try the dashboard or take screenshots without showing your own data. |
-| `herdr-install` | See your running Claude sessions in a Herdr panel: context, cache expiry and new alerts at a glance. |
+| `herdr-install` | A decision view in a Herdr panel: are you OK this week, and what to do right now. |
 | `herdr-uninstall` | Remove the Herdr panel. |
 | `version` | Which version you run, for a bug report. |
 | `help` | What each command saves you, before its syntax. |

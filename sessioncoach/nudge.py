@@ -318,3 +318,4 @@ plan_install = functools.partial(hooks.plan_install, SPEC)
 plan_uninstall = functools.partial(hooks.plan_uninstall, SPEC)
 install = functools.partial(hooks.install, SPEC)
 uninstall = functools.partial(hooks.uninstall, SPEC)
+active_for = functools.partial(hooks.active_for, SPEC)  # cwd=None, cfg_dir=None: like resume.active_for

@@ -6,7 +6,7 @@ and fakes its commands. XDG_CONFIG_HOME is dropped so systemd units can only lan
 import os
 import subprocess
 
-for _k in [k for k in os.environ if k.startswith("SESSIONCOACH_")]:
+for _k in [k for k in os.environ if k.startswith("SESSIONCOACH_") or k.startswith("KIT_")]:
     del os.environ[_k]
 os.environ["KIT_SCHEDULER"] = "none"  # not setdefault: a KIT_SCHEDULER=cron in the shell must not reach the real crontab
 os.environ.pop("XDG_CONFIG_HOME", None)

@@ -1,6 +1,6 @@
 # Groups (clients)
 
-A **group** is a client — Pretty, ITTI, DAF, whoever you work for. It is the tenant that
+A **group** is a client — Acme, Initech, whoever you work for. It is the tenant that
 `projects.json` rules already carried: the second half of `Labeler`'s `(project, tenant)`, which the
 dashboard, budgets and the daily review already use. Groups do not add a second mechanism; they
 name and order that existing tenant, and let the Herdr panel and `live --json` split today's, the
@@ -11,10 +11,10 @@ A group is only ever a label over a tenant id, kept in the `"groups"` block of
 
 ```json
 {
-  "groups": {"pretty": {"label": "Pretty"}, "daf": {"label": "DAF"}},
+  "groups": {"acme": {"label": "Acme"}, "initech": {"label": "Initech"}},
   "rules": [
-    {"match": "-Users-me-code-pretty-shop", "tenant": "pretty", "source": "cli"},
-    {"match": "-Users-me-code-daf-etl", "tenant": "daf", "source": "herdr"}
+    {"match": "-Users-me-code-acme-shop", "tenant": "acme", "source": "cli"},
+    {"match": "-Users-me-code-initech-etl", "tenant": "initech", "source": "herdr"}
   ]
 }
 ```
@@ -26,12 +26,12 @@ the display order. A tenant used by a rule but absent from `"groups"` shows with
 
 ```bash
 sessioncoach group list                        # each group, its rules, and today / 7 / 30 day spend
-sessioncoach group add "Pretty" [--id pretty]  # name a client (id defaults to the slug)
-sessioncoach group assign pretty ~/work/pretty # a folder -> rules for itself and its subfolders
-sessioncoach group assign pretty "-Users-me-code-*"  # ... or an fnmatch pattern over the dir name
-sessioncoach group unassign ~/work/pretty      # drop a folder's (or a pattern's) rules
-sessioncoach group rename pretty "Pretty GmbH" # change the display label
-sessioncoach group remove pretty [--force]     # refuse while rules use it, unless --force
+sessioncoach group add "Acme" [--id acme]  # name a client (id defaults to the slug)
+sessioncoach group assign acme ~/work/acme # a folder -> rules for itself and its subfolders
+sessioncoach group assign acme "-Users-me-code-*"  # ... or an fnmatch pattern over the dir name
+sessioncoach group unassign ~/work/acme    # drop a folder's (or a pattern's) rules
+sessioncoach group rename acme "Acme GmbH" # change the display label
+sessioncoach group remove acme [--force]   # refuse while rules use it, unless --force
 sessioncoach group sync-herdr --json FILE|-    # feed the herdr-space-groups assignments in
 ```
 
@@ -55,10 +55,10 @@ coming version.
 
 `sync-herdr` replaces **only** the rules with `"source": "herdr"`; rules you wrote by hand or with
 the CLI are never touched. It creates a missing group (label = name; a nested name like
-`Clients/Pretty` uses its leaf `Pretty`), skips the home folder, and is idempotent: the same input
-changes nothing, so the file is not rewritten. The **same leaf name** — `Clients/Pretty` and
-`Other/Pretty` — is the same client and merges into one group; two different names whose slug
-collides (`Pretty` vs `Pretty!`) get `-2`, `-3`… A group keeps its id across syncs: the leaf it
+`Clients/Acme` uses its leaf `Acme`), skips the home folder, and is idempotent: the same input
+changes nothing, so the file is not rewritten. The **same leaf name** — `Clients/Acme` and
+`Other/Acme` — is the same client and merges into one group; two different names whose slug
+collides (`Acme` vs `Acme!`) get `-2`, `-3`… A group keeps its id across syncs: the leaf it
 came from is stored as `herdr_name`, and a later feed resolves a name to an existing group by that
 `herdr_name` (then by label) before minting a new slug. See [docs/herdr.md](herdr.md) for
 installing `herdr-space-groups`.

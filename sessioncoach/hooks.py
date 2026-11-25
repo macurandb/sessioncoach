@@ -39,8 +39,11 @@ class HookSpec:
         return paths.kit_command_str("hook", self.arg, kit_bin=kit_bin)
 
     def is_ours(self, command):
-        """Any format ever written (bin/sessioncoach, bin/kit, `python -m sessioncoach` or `python -m kit`)."""
-        return (" hook %s" % self.arg) in (command or "") and paths.mentions_us(command)
+        """Any format ever written (bin/sessioncoach, bin/kit, `python -m sessioncoach` or `python -m kit`).
+        A command that is not a string (a hand-edited settings.json) is not ours, and never raises."""
+        if not isinstance(command, str):
+            return False
+        return (" hook %s" % self.arg) in command and paths.mentions_us(command)
 
 
 PROMPT = HookSpec("prompt", "UserPromptSubmit", None, ".bak-hook", "nudge", "hook",
@@ -134,6 +137,14 @@ def installed(spec, settings_path=None):
         return installed_in(spec, load(settings_path or paths.user_settings()))
     except (OSError, ValueError):
         return False
+
+
+def active_for(spec, cwd=None, cfg_dir=None):
+    """True when Claude Code would run `spec`'s hook for a session in `cwd`: in the project's settings
+    (settings.local.json, settings.json) or the user's (`cfg_dir`, else CLAUDE_CONFIG_DIR, else ~/.claude)."""
+    cfg = cfg_dir or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(paths.HOME, ".claude")
+    files = [os.path.join(cwd, ".claude", n) for n in ("settings.local.json", "settings.json")] if cwd else []
+    return any(installed(spec, f) for f in [*files, os.path.join(os.path.expanduser(cfg), "settings.json")])
 
 
 def _container(parent, key, kind, where):

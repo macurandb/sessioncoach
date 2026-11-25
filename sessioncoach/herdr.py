@@ -5,8 +5,10 @@ programs kept in `<app home>/mods/<name>/`. This module copies sessioncoach's pa
 `<app home>/mods/sessioncoach/`, writes the `config.json` it reads, and records each shipped file's
 sha256 in a manifest so a later run can tell a user's edit from an update.
 
-Nothing is touched outside that one folder; the panel itself only ever runs
-`sessioncoach live --json` locally (see docs/herdr.md).
+The panel it installs runs `sessioncoach live --json` to show a decision view over the running
+Claude Code sessions (am I OK this week, what should I do now), writes the `.groups-sync.json`
+staging file and runs `sessioncoach group sync-herdr` on it (which edits `projects.json`), and keeps
+its state in two shared keys (`sessioncoach.toasted`, `sessioncoach.folded`).
 """
 import contextlib
 import hashlib
@@ -19,7 +21,7 @@ from . import __version__, config, paths
 
 OK, WARN = "ok", "warn"  # installer.check statuses; herdr stays free of the heavy installer import
 MOD_DIR = "sessioncoach"
-MOD_FILES = ("main.js", "mod.json", "icon.svg")
+MOD_FILES = ("main.js", "logic.js", "mod.json", "icon.svg")
 MANIFEST = ".sessioncoach-manifest.json"
 HERDR_WRITES = ("gpui-kit.d.ts", "jsconfig.json")  # type files Herdr itself writes into every mod folder
 SYNC_FILE = ".groups-sync.json"  # the panel stages the Herdr groups it hands to `sessioncoach group sync-herdr` here

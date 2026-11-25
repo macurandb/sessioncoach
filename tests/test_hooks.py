@@ -130,6 +130,13 @@ class HooksTest(unittest.TestCase):
                 self.assertEqual((mod.HOOK_EVENT, mod.SPEC.backup_suffix), (event, suffix))
                 self.assertTrue(mod.is_ours("/usr/bin/python3 -m kit hook " + arg))
 
+    def test_a_command_that_is_not_a_string_is_not_ours(self):
+        # a hand-edited settings.json can hold any JSON value there; reading it must never raise
+        for bad in (42, None, ["sessioncoach hook prompt"], {"c": 1}, True):
+            with self.subTest(command=bad):
+                self.assertFalse(hooks.PROMPT.is_ours(bad))
+                self.assertFalse(hooks.SESSION_START.is_ours(bad))
+
     def test_registry(self):
         self.assertEqual([s.arg for s in hooks.HOOKS], ["prompt", "session-start", "pre-compact", "keep-context"])
         self.assertEqual([s.module() for s in hooks.HOOKS], MODULES)

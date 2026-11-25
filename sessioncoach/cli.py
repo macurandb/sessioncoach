@@ -704,7 +704,7 @@ VALUE = {
                     "and whether it is set right.",
     "dashboard": "Cost, causes and recommendations at a glance, in your browser (local only).",
     "demo": "Try the dashboard or take screenshots without showing your own data.",
-    "herdr-install": "See your running Claude sessions in a Herdr panel: context, cache expiry and new alerts at a glance.",
+    "herdr-install": "A decision view in a Herdr panel: are you OK this week, and what to do right now.",
     "herdr-uninstall": "Remove the Herdr panel.",
     "version": "Which version you run, for a bug report.",
     "help": "What each command saves you, before its syntax.",

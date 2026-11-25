@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- The Herdr panel becomes a decision view: a per-account verdict (am I OK this week), a NOW list of
+  what to do right now (each action priced as a share of the week), and the clients / sessions /
+  alerts folded under it. It also feeds the `herdr-space-groups` assignments back into
+  `sessioncoach group sync-herdr` (`sync_herdr_groups`, default on); the panel's pure logic ships in
+  a `logic.js` file so it is testable with node. See docs/herdr.md.
+- `sessioncoach live --json` adds `sessions[].turn_usd` (what each further turn re-reads, list
+  price), `sessions[].clear_handoff` (whether `/clear` there gives a free automatic handoff),
+  `accounts[].five_hour.usd_per_pct` / `accounts[].seven_day.usd_per_pct` (list-price USD of one
+  percentage point of the window, from the first point of the current window since the login to the
+  earliest sample that reached its highest percentage) and `accounts[].groups` (that account's
+  window spend per tenant, adding up to its `window_usd`). The contract stays `"version": 1` (see docs/live-json.md).
+- The decision view is hardened: `clear_handoff` is true only when a free handoff is really offered
+  on return (the prompt and resume hooks are active **and** the idle guard is on), `usd_per_pct` validates its
+  samples and never raises on bad ones, the long-prompt tier is applied to `turn_usd`/`rewrite_usd`,
+  actions order by rewrite cost, the verdict wraps in a narrow pane, and a corrupt group feed is
+  skipped and an over-limit one is reported, instead of clearing every imported rule.
 - `sessioncoach group` names your clients and reports each one's spend today, this week and this
   month; `group sync-herdr` takes the clients made with the `herdr-space-groups` mod.
   See docs/groups.md. Its writes are serialised by an operating-system lock, a
@@ -41,6 +57,16 @@
   and the days before Code Mode. Tools run inside a REPL block count; REPL and Poll do not.
 - On macOS, an alert that terminal-notifier cannot show (its notifications not allowed yet in System Settings) goes
   out through osascript instead of being lost.
+- Fixed: a redraw re-records each idle session's last API response, so `limits_samples` gained rows with a fresh
+  timestamp but an old, lower percentage; `live --json` and the pace projection now read each window's percentage as
+  the MAX of its samples (the real value never decreases within a window), so the shown week % and `usd_per_pct` no
+  longer flap and a stale low row can no longer fake a "hits 100 %" pace alert. Rows of the same second count as
+  their highest value, the max no longer drops after 6 h, an ended window is not reported, samples dated in the
+  future are ignored, and the pace reads only its own window.
+- The group sync is hardened: a corrupt or duplicate group id, a space assigned to a missing group, a non-array space
+  list and a name past the limit are all refused before any write; the staged payload is checked against the 1 MiB
+  read limit, a negative idle reads "0 min", UNC folders count as absolute, and sync errors are stable localized lines
+  rather than raw exception text.
 
 ## 0.1.1 - 2026-10-26
 

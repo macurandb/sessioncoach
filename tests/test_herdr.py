@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -22,8 +23,8 @@ from sessioncoach import __file__ as _pkg_init
 from sessioncoach import cli, herdr, installer, live, paths
 
 SESSION_KEYS = {"pid", "session_id", "cwd", "project", "status", "model", "context_tokens",
-                "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "today_usd",
-                "source", "match", "account", "account_id", "group"}
+                "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "turn_usd",
+                "today_usd", "clear_handoff", "source", "match", "account", "account_id", "group"}
 VIEW_KEYS = {"version", "now", "lang", "limits", "sessions", "accounts", "groups", "events", "cursor"}
 
 
@@ -108,6 +109,25 @@ class Install(Base):
         self.assertEqual(new["args_extra"], ["--demo"])
         self.assertEqual(new["hint_min_tokens"], 300000)
         self.assertNotIn("args_prefix", new)
+
+    def test_mod_files_include_logic_js(self):
+        self.assertIn("logic.js", herdr.MOD_FILES)
+
+    def test_upgrade_from_a_three_file_install_adds_logic_js(self):
+        # an install made before logic.js shipped has no logic.js and no manifest entry for it:
+        # re-running herdr-install must copy it in and rebuild the manifest, not refuse as "edited"
+        os.makedirs(self.app())
+        with mock.patch("shutil.which", return_value="/usr/bin/sessioncoach"):
+            self.assertEqual(herdr.install(), 0)
+        os.remove(os.path.join(self.mod(), "logic.js"))
+        manifest = json.loads(self.read(herdr.MANIFEST))
+        del manifest["files"]["logic.js"]
+        with open(os.path.join(self.mod(), herdr.MANIFEST), "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh)
+        with mock.patch("shutil.which", return_value="/usr/bin/sessioncoach"):
+            self.assertEqual(herdr.install(), 0)
+        self.assertTrue(os.path.isfile(os.path.join(self.mod(), "logic.js")))
+        self.assertEqual(sorted(json.loads(self.read(herdr.MANIFEST))["files"]), sorted(herdr.MOD_FILES))
 
     def test_which_missing_uses_sys_executable(self):
         os.makedirs(self.app())
@@ -336,8 +356,8 @@ class DemoView(Base):
         self.assertEqual(v["accounts"][0]["label"], "Personal · Max")
         self.assertEqual((v["accounts"][0]["five_hour"]["pct"], v["accounts"][0]["seven_day"]["pct"]), (12.0, 51.0))
         self.assertEqual((v["accounts"][1]["five_hour"]["pct"], v["accounts"][1]["seven_day"]["pct"]), (3.0, 20.0))
-        self.assertEqual([g["id"] for g in v["groups"]], ["pretty", "globex", "daf", "unassigned"])
-        self.assertEqual([s["group"] for s in v["sessions"]], ["pretty", "globex", "unassigned"])
+        self.assertEqual([g["id"] for g in v["groups"]], ["acme", "globex", "initech", "unassigned"])
+        self.assertEqual([s["group"] for s in v["sessions"]], ["acme", "globex", "unassigned"])
 
 
 class PackageData(unittest.TestCase):
@@ -349,6 +369,16 @@ class PackageData(unittest.TestCase):
             text = fh.read()
         for name in herdr.MOD_FILES:  # listed by name: `herdr-app check` writes other files there
             self.assertIn('"herdr_mod/%s"' % name, text, "pyproject.toml package-data must ship %s" % name)
+
+    def test_staging_path_agrees_with_herdr_sync_file(self):
+        # the panel stages its payload at appHome() + SYNC_FILE; herdr.py removes SYNC_FILE on
+        # uninstall, so the two constants must name the same file inside the mod folder.
+        pkg = os.path.dirname(os.path.abspath(_pkg_init))
+        with open(os.path.join(pkg, "herdr_mod", "main.js"), encoding="utf-8") as fh:
+            text = fh.read()
+        m = re.search(r'SYNC_FILE\s*=\s*"([^"]+)"', text)
+        self.assertIsNotNone(m, "main.js must define the SYNC_FILE constant")
+        self.assertEqual(m.group(1), "/mods/sessioncoach/" + herdr.SYNC_FILE)
 
 
 if __name__ == "__main__":
