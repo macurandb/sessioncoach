@@ -17,7 +17,7 @@ import {
 } from "herdr";
 import {
   buildSyncPayload, buildActions, weekVerdict, fiveHourWarn, fiveHourWarnText,
-  fmtPct, hhmm, fmtTokens, cacheLeft, usd, usdInt, ppcUsable,
+  fmtPct, hhmm, fmtTokens, cacheLeft, usd, usdInt, ppcUsable, unambiguousLink, utf8Bytes,
 } from "./logic.js";
 
 const DEFAULTS = {
@@ -27,6 +27,7 @@ const DEFAULTS = {
 const TOASTED = "sessioncoach.toasted";
 const FOLDED = "sessioncoach.folded";
 const SYNC_FILE = "/mods/sessioncoach/.groups-sync.json";
+const MAX_STAGE_BYTES = 1024 * 1024;  // readTextFile reads at most 1 MiB: a larger staging file would not read back
 
 // The panel's own section labels and error lines, in the language `live --json` reports (`lang`).
 const LANG = {
@@ -40,6 +41,10 @@ const LANG = {
     unknownVersion: "sessioncoach live: versión desconocida ",
     syncFailed: "group sync falló (exit ",
     syncErr: "group sync: ",
+    syncRead: "group sync: no se pudo leer el archivo temporal",
+    syncWrite: "group sync: no se pudo escribir el archivo temporal",
+    syncRun: "group sync: no se pudo ejecutar sessioncoach",
+    syncTooLarge: "group sync: el payload es demasiado grande",
     syncGroups: "group sync: demasiados grupos",
     syncFolders: "group sync: demasiadas carpetas en un grupo",
     syncName: "group sync: nombre de grupo demasiado largo",
@@ -55,6 +60,10 @@ const LANG = {
     unknownVersion: "sessioncoach live: unknown version ",
     syncFailed: "group sync failed (exit ",
     syncErr: "group sync: ",
+    syncRead: "group sync: could not read the staging file",
+    syncWrite: "group sync: could not write the staging file",
+    syncRun: "group sync: could not run sessioncoach",
+    syncTooLarge: "group sync: payload too large",
     syncGroups: "group sync: too many groups",
     syncFolders: "group sync: too many folders in a group",
     syncName: "group sync: group name too long",
@@ -191,33 +200,56 @@ export default class SessionCoach extends View {
   // Feed the herdr-space-groups assignments back into sessioncoach. The full set is sent every time
   // ({"groups": []} clears them); the last applied payload is remembered only after the CLI exits 0,
   // so a failed sync is retried on the next poll. `exec` has no stdin, so the payload is staged in a
-  // file whose current contents are passed as the write's `expected` value.
+  // file whose current contents are passed as the write's `expected` value. `syncError` is cleared on
+  // every "nothing to do" path (sync off, no usable payload, already applied) and set to a stable
+  // localized line on a real failure — never a raw exception message.
   async syncGroups() {
-    if (this.cfg.sync_herdr_groups === false) return;
+    const L = this.langTable();
+    if (this.cfg.sync_herdr_groups === false) {
+      this.syncError = null;
+      return;
+    }
+    const payload = buildSyncPayload(shared("space-groups"), spaces());
+    if (payload == null) {  // no usable shared state, or corrupt input: nothing to do
+      this.syncError = null;
+      return;
+    }
+    if (payload.error) {  // valid but over sync-herdr's limits: no sync, say why
+      this.syncError = this.syncLimitText(payload.error);
+      return;
+    }
+    const text = JSON.stringify(payload);
+    if (text === this.lastAppliedJson) {  // already applied: nothing to do, no error
+      this.syncError = null;
+      return;
+    }
+    if (utf8Bytes(text) > MAX_STAGE_BYTES) {  // readTextFile reads at most 1 MiB: never write a larger file
+      this.syncError = L.syncTooLarge;
+      return;
+    }
+    const path = appHome() + SYNC_FILE;
     try {
-      const payload = buildSyncPayload(shared("space-groups"), spaces());
-      if (payload == null) return;  // no usable shared state, or corrupt input: nothing to do
-      if (payload.error) {  // valid but over sync-herdr's limits: no sync, say why
-        this.syncError = this.syncLimitText(payload.error);
-        return;
-      }
-      const text = JSON.stringify(payload);
-      if (text === this.lastAppliedJson) return;  // already applied
-      const path = appHome() + SYNC_FILE;
       await this.stagePayload(path, text);
-      const command = typeof this.cfg.command === "string" && this.cfg.command ? this.cfg.command : DEFAULTS.command;
-      const args = [];
-      if (Array.isArray(this.cfg.args_prefix)) args.push(...this.cfg.args_prefix.map(String));
-      args.push("group", "sync-herdr", "--json", path);
-      const result = await exec(command, args, { timeout: 15000 });
-      if (result.code === 0) {
-        this.lastAppliedJson = text;
-        this.syncError = null;
-      } else {
-        this.syncError = this.langTable().syncFailed + result.code + ")";
-      }
     } catch (e) {
-      this.syncError = this.langTable().syncErr + (e && e.message ? e.message : String(e));
+      this.syncError = e && e.kind === "read" ? L.syncRead : L.syncWrite;
+      return;
+    }
+    const command = typeof this.cfg.command === "string" && this.cfg.command ? this.cfg.command : DEFAULTS.command;
+    const args = [];
+    if (Array.isArray(this.cfg.args_prefix)) args.push(...this.cfg.args_prefix.map(String));
+    args.push("group", "sync-herdr", "--json", path);
+    let result;
+    try {
+      result = await exec(command, args, { timeout: 15000 });
+    } catch (e) {  // exec rejects when the command cannot start
+      this.syncError = L.syncRun;
+      return;
+    }
+    if (result.code === 0) {
+      this.lastAppliedJson = text;
+      this.syncError = null;
+    } else {
+      this.syncError = L.syncFailed + result.code + ")";
     }
   }
 
@@ -231,19 +263,27 @@ export default class SessionCoach extends View {
   // text, expected)` writes only while the file still matches `expected`, and `expected: null` means
   // "the file is absent — create it" (see gpui-kit.d.ts). `readTextFile` returns null for an absent
   // file and rejects for one that exists but cannot be read, so an unreadable staging file is never
-  // overwritten blindly: the reject propagates to syncGroups and the error line is shown instead.
+  // overwritten blindly: the reject carries `kind: "read"` and syncGroups shows the read error line.
   async stagePayload(path, text) {
     let expected;
     try {
       expected = await readTextFile(path);
     } catch (e) {
-      throw e;  // unreadable: do not write expected=null over a file we could not read
+      const err = new Error("unreadable staging file");
+      err.kind = "read";
+      throw err;  // unreadable: do not write expected=null over a file we could not read
     }
     try {
       await writeTextFile(path, text, expected);
     } catch (e) {
-      expected = await readTextFile(path);  // a stale snapshot: re-read once and retry
-      await writeTextFile(path, text, expected);
+      try {
+        expected = await readTextFile(path);  // a stale snapshot: re-read once and retry
+        await writeTextFile(path, text, expected);
+      } catch (e2) {
+        const err = new Error("could not write the staging file");
+        err.kind = "write";
+        throw err;
+      }
     }
   }
 
@@ -292,7 +332,7 @@ export default class SessionCoach extends View {
     if (!candidates.length) return;
     for (const e of candidates) {
       const matches = e.session_id != null ? this.sessionLinkBySid.get(e.session_id) : undefined;
-      const link = matches && matches.length === 1 ? matches[0] : undefined;
+      const link = unambiguousLink(matches);  // ambiguous id (two sessions): no toast link
       notify({
         title: e.title || "",
         body: e.body || "",

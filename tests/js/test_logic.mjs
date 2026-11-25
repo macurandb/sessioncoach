@@ -22,6 +22,10 @@ function expectDdd(epoch, lang) {
   const days = DAYS[lang === "es" ? "es" : "en"];
   return days[d.getDay()] + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
+function expectHHMM(epoch) {
+  const d = new Date(epoch * 1000);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
 
 const dir = mkdtempSync(join(tmpdir(), "sessioncoach-logic-"));
 try {
@@ -73,6 +77,36 @@ try {
   const R = 1_800_000_000;
   assert.equal(L.dddHHMM(R, "en"), expectDdd(R, "en"));
   assert.equal(L.dddHHMM(R, "es"), expectDdd(R, "es"));
+
+  // ---- fmtIdle: a negative idle (future last_activity) clamps to 0 ----
+  assert.equal(L.fmtIdle(-3600), "0 min");
+  assert.equal(L.fmtIdle(0), "0 min");
+  assert.equal(L.fmtIdle(5 * 60), "5 min");
+  assert.equal(L.fmtIdle(46 * 3600), "46 h");
+  assert.equal(L.fmtIdle(3 * 86400), "3 d");
+  assert.equal(L.fmtIdle(null), "");
+  assert.equal(L.fmtIdle(NaN), "");
+
+  // ---- the 5 h line (fiveHourWarn / fiveHourWarnText) ----
+  assert.equal(L.fiveHourWarn({ eta: 500, resets_at: 1000 }), true);
+  assert.equal(L.fiveHourWarn({ eta: 1500, resets_at: 1000 }), false);
+  assert.equal(L.fiveHourWarn({ eta: 500 }), false);  // no reset: not "before it resets"
+  assert.equal(L.fiveHourWarn({}), false);
+  assert.equal(L.fiveHourWarnText({ eta: R - 600 }, "es"), "✗ 100 % a las " + expectHHMM(R - 600));
+  assert.equal(L.fiveHourWarnText({ eta: R - 600 }, "en"), "✗ 100% at " + expectHHMM(R - 600));
+
+  // ---- unambiguousLink: a toast links only when the id names exactly one session ----
+  assert.equal(L.unambiguousLink(undefined), undefined);
+  assert.equal(L.unambiguousLink(null), undefined);
+  assert.equal(L.unambiguousLink([]), undefined);
+  assert.equal(L.unambiguousLink([{ address: "a" }, { address: "b" }]), undefined);  // two sessions, one id
+  assert.deepEqual(L.unambiguousLink([{ address: "a" }]), { address: "a" });
+
+  // ---- utf8Bytes: the staging payload's size in bytes ----
+  assert.equal(L.utf8Bytes(""), 0);
+  assert.equal(L.utf8Bytes("abc"), 3);
+  assert.equal(L.utf8Bytes("é"), 2);
+  assert.equal(L.utf8Bytes("a".repeat(1024)), 1024);
 
   // ---- weekState: the four verdict states ----
   assert.equal(L.weekState({ eta: 500, resets_at: 1000, projected_pct: 120 }), "red");
@@ -210,6 +244,36 @@ try {
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: manySpaces },
     manyFolders.map((f, i) => ({ id: "sp" + i, folder: f, machine: false }))), { error: "folders" });
+
+  // ---- spacesList not an array -> null ----
+  assert.equal(L.buildSyncPayload({ groups: [], spaces: {} }, null), null);
+  assert.equal(L.buildSyncPayload({ groups: [], spaces: {} }, "x"), null);
+
+  // ---- every spaces entry must reference an existing group, even a space not in the local list ----
+  assert.equal(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { remote: "ghost" } },
+    [{ id: "sp1", folder: "/x", machine: false }]), null);
+  // ... a non-null value of any type that is not a group id is corrupt
+  assert.equal(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: 3 } },
+    [{ id: "sp1", folder: "/x", machine: false }]), null);
+
+  // ---- group ids: empty after trim, non-finite number, duplicate after normalising ----
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "  ", name: "Acme" }], spaces: {} }, []), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: NaN, name: "Acme" }], spaces: {} }, []), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: Infinity, name: "Acme" }], spaces: {} }, []), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "acme" }, { id: "acme" }], spaces: {} }, []), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: 1 }, { id: "1" }], spaces: {} }, []), null);  // 1 and "1" collide
+
+  // ---- UNC folders are absolute; a final name that trims empty falls back to the (valid) id ----
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
+    [{ id: "sp1", folder: "\\\\server\\share\\work", machine: false }]),
+    { groups: [{ name: "Acme", folders: ["\\\\server\\share\\work"] }] });
+  // a group whose name is only whitespace keeps its id as the name
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "   " }], spaces: { sp1: "acme" } },
+    [{ id: "sp1", folder: "/x", machine: false }]), { groups: [{ name: "acme", folders: ["/x"] }] });
 
   console.log("logic.js ok");
 } finally {

@@ -167,16 +167,60 @@ class UsdPerPct(Base):
         self.assertAlmostEqual(a["seven_day"]["usd_per_pct"], 0.03, places=2)  # from 10 %, not the bad row
 
     def test_bad_sample_values_do_not_raise(self):
+        # one bad value per subtest, each against its own DB state, so they never mask one another
+        for bad in ("50%", '{"pct": 50}', float("inf"), float("nan"), True):
+            with self.subTest(bad=bad):
+                con = self.connect()
+                con.execute("DELETE FROM limits_samples")
+                con.execute("DELETE FROM requests")
+                seven_reset = NOW + 86400
+                self.sample(con, self.ra, NOW - 3600, seven_pct=10.0, seven_reset=seven_reset)
+                self.request(con, self.ra, NOW - 1800)  # $1
+                con.execute("INSERT INTO limits_samples (ts, session_id, root, seven_pct, seven_reset) "
+                            "VALUES (?,?,?,?,?)", (NOW - 60, None, self.ra, bad, seven_reset))
+                con.commit()
+                a = self.view()["accounts"][0]  # must not raise
+                self.assertIsNone(a["seven_day"]["usd_per_pct"])  # a bad latest -> null
+
+    def test_a_positive_rate_that_rounds_to_zero_is_null(self):
         con = self.connect()
         seven_reset = NOW + 86400
         self.sample(con, self.ra, NOW - 3600, seven_pct=10.0, seven_reset=seven_reset)
-        self.request(con, self.ra, NOW - 1800)  # $1
-        for bad in ("50%", '{"pct": 50}', float("inf"), float("nan"), True):
-            con.execute("INSERT INTO limits_samples (ts, session_id, root, seven_pct, seven_reset) "
-                        "VALUES (?,?,?,?,?)", (NOW - 60, None, self.ra, bad, seven_reset))
+        self.request(con, self.ra, NOW - 1800, input=1)  # a tiny but positive spend
+        self.sample(con, self.ra, NOW - 60, seven_pct=40.0, seven_reset=seven_reset)
         con.commit()
-        a = self.view()["accounts"][0]  # must not raise
-        self.assertIsNone(a["seven_day"]["usd_per_pct"])  # a bad latest -> null
+        a = self.view()["accounts"][0]
+        self.assertIsNone(a["seven_day"]["usd_per_pct"])  # usd / 30 points rounds to 0.00 -> null
+
+
+class Validators(unittest.TestCase):
+    """The shared validators, checked directly with the types SQLite converts (bool, NaN, inf)."""
+
+    def test_valid_pct(self):
+        self.assertTrue(limits.valid_pct(0))
+        self.assertTrue(limits.valid_pct(100))
+        self.assertTrue(limits.valid_pct(54.5))
+        self.assertFalse(limits.valid_pct(True))
+        self.assertFalse(limits.valid_pct(False))
+        self.assertFalse(limits.valid_pct(float("nan")))
+        self.assertFalse(limits.valid_pct(float("inf")))
+        self.assertFalse(limits.valid_pct(-1))
+        self.assertFalse(limits.valid_pct(101))
+        self.assertFalse(limits.valid_pct("54"))
+        self.assertFalse(limits.valid_pct(None))
+
+    def test_valid_epoch(self):
+        now = NOW
+        self.assertTrue(limits.valid_epoch(NOW, now))
+        self.assertTrue(limits.valid_epoch(NOW - 86400, now))
+        self.assertTrue(limits.valid_epoch(1577836800, now))  # 2020-01-01, the earliest real ts
+        self.assertFalse(limits.valid_epoch(True, now))
+        self.assertFalse(limits.valid_epoch(float("nan"), now))
+        self.assertFalse(limits.valid_epoch(float("inf"), now))
+        self.assertFalse(limits.valid_epoch(1e308, now))           # far future
+        self.assertFalse(limits.valid_epoch(0, now))               # pre-2020
+        self.assertFalse(limits.valid_epoch(NOW + 9 * 86400, now))  # beyond now + 8 days
+        self.assertFalse(limits.valid_epoch("123", now))
 
 
 class TurnUsd(unittest.TestCase):
@@ -276,6 +320,33 @@ class ClearHandoff(Base):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertFalse(sessions["a"]["clear_handoff"])  # a resume hook alone is not a free handoff
 
+    def test_clear_handoff_cache_distinguishes_two_config_dirs(self):
+        # the same cwd in two config dirs: the cache is keyed by (config dir, cwd), so each dir is
+        # asked once and can answer differently (the resume hook lives in each dir's own settings).
+        cfg_a = os.path.dirname(self.ra)
+        ra_b = os.path.join(self.home, "acct-b", "projects")
+        cfg_b = os.path.dirname(ra_b)
+        os.makedirs(os.path.join(cfg_b, "sessions"))
+        os.makedirs(ra_b)
+        os.environ["SESSIONCOACH_PROJECTS_DIRS"] = os.pathsep.join([self.ra, ra_b])
+        self.addCleanup(os.environ.__setitem__, "SESSIONCOACH_PROJECTS_DIRS", self.ra)
+        for cfg, pid, sid in ((cfg_a, 1001, "a"), (cfg_b, 1002, "b")):
+            with open(os.path.join(cfg, "sessions", "%d.json" % pid), "w", encoding="utf-8") as fh:
+                json.dump({"pid": pid, "sessionId": sid, "cwd": "/x/shared", "status": "busy"}, fh)
+        seen = []
+
+        def fake_active(cwd, cfg_dir=None):
+            seen.append((cfg_dir, cwd))
+            return cfg_dir == cfg_a  # the same cwd, a different answer per config dir
+
+        with mock.patch.object(live.resume, "active_for", side_effect=fake_active), \
+                mock.patch.object(live.idleguard, "enabled", return_value=True):
+            sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
+        self.assertTrue(sessions["a"]["clear_handoff"])
+        self.assertFalse(sessions["b"]["clear_handoff"])
+        # one call per distinct (config dir, cwd), with the exact dirs and cwd
+        self.assertEqual(seen, [(cfg_a, "/x/shared"), (cfg_b, "/x/shared")])
+
 
 class StaleSamples(Base):
     """Idle sessions re-record their last response's pct with a fresh ts, so `limits_samples` holds
@@ -349,6 +420,26 @@ class StaleSamples(Base):
             self.sample(con, self.ra, NOW - ago, five_pct=34.0, five_reset=reset)
         con.commit()
         self.assertIsNone(limits.pace(con, "five_hour", reset, NOW, 73.0, root=self.ra))
+
+    def test_corrupt_samples_never_raise_nor_leak(self):
+        con = self.connect()
+        reset = NOW + 3600
+        self.sample(con, self.ra, NOW - 1200, five_pct=40.0, five_reset=reset)
+        self.sample(con, self.ra, NOW - 60, five_pct=60.0, five_reset=reset)
+        # a corrupt NaN pct inside the lookback, a reset far in the future, and a ts far in the future
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) "
+                    "VALUES (?,?,?,?,?)", (NOW - 120, None, self.ra, float("nan"), reset))
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) "
+                    "VALUES (?,?,?,?,?)", (NOW - 60, None, self.ra, 99.0, 1e308))
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset) "
+                    "VALUES (?,?,?,?,?)", (NOW + 365 * 86400, None, self.ra, 99.0, reset))
+        con.commit()
+        v = self.view()  # must not raise
+        a = v["accounts"][0]
+        self.assertEqual(a["five_hour"]["pct"], 60.0)
+        self.assertEqual(a["five_hour"]["resets_at"], reset)
+        self.assertEqual(v["limits"]["five_hour"]["pct"], 60.0)  # never inf/nan
+        self.assertIsNotNone(a["five_hour"]["eta"])  # a real rise still projects
 
 
 class Demo(unittest.TestCase):

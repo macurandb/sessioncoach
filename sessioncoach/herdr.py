@@ -9,9 +9,6 @@ The panel it installs runs `sessioncoach live --json` to show a decision view ov
 Claude Code sessions (am I OK this week, what should I do now), writes the `.groups-sync.json`
 staging file and runs `sessioncoach group sync-herdr` on it (which edits `projects.json`), and keeps
 its state in two shared keys (`sessioncoach.toasted`, `sessioncoach.folded`).
-
-Nothing is touched outside that one folder; the panel itself only ever runs
-`sessioncoach live --json` locally (see docs/herdr.md).
 """
 import contextlib
 import hashlib

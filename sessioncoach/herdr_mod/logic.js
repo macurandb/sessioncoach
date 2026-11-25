@@ -85,14 +85,16 @@ export function cacheLeft(s, now, lang) {
   return Math.round((s.cache_expires_at - now) / 60) + " min";
 }
 
-// An idle time in min/h/d ("5 min", "46 h", "3 d").
+// An idle time in min/h/d ("5 min", "46 h", "3 d"). A negative idle (a future last_activity,
+// a clock skew) is clamped to 0, so it reads "0 min" rather than disappearing.
 export function fmtIdle(secs) {
-  if (secs == null || !Number.isFinite(secs) || secs < 0) return "";
-  const m = Math.floor(secs / 60);
+  if (secs == null || !Number.isFinite(secs)) return "";
+  const s = Math.max(0, secs);
+  const m = Math.floor(s / 60);
   if (m < 60) return m + " min";
-  const h = Math.floor(secs / 3600);
+  const h = Math.floor(s / 3600);
   if (h < 48) return h + " h";
-  return Math.floor(secs / 86400) + " d";
+  return Math.floor(s / 86400) + " d";
 }
 
 // A usable USD-per-percentage-point: a finite number > 0. Anything else (null, 0, "8.85", NaN,
@@ -218,6 +220,29 @@ export function buildActions(view, hintMinTokens) {
 
 // ---- the group sync (section F) ----
 
+// A toast/event links to a terminal only when its session_id names exactly one linked session:
+// two sessions sharing an id are ambiguous, so clicking could focus the wrong terminal.
+export function unambiguousLink(matches) {
+  return Array.isArray(matches) && matches.length === 1 ? matches[0] : undefined;
+}
+
+// UTF-8 byte length of a string, so the staging payload can be checked against readTextFile's
+// 1 MiB limit before it is written (a payload over the limit would otherwise not read back).
+export function utf8Bytes(text) {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.codePointAt(i);
+    if (c > 0xffff) i++;  // a surrogate pair counts once
+    bytes += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+
+// A folder path the panel treats as absolute: a POSIX root, a Windows drive, or a UNC share.
+function isAbsoluteFolder(folder) {
+  return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(folder);
+}
+
 // Build the `group sync-herdr` payload from the herdr-space-groups shared value and the local
 // spaces. Returns null when the shared value is not usable OR the input is corrupt (no sync, so a
 // corrupt input can never become an empty feed that clears every imported rule); `{error: <code>}`
@@ -228,21 +253,34 @@ export function buildActions(view, hintMinTokens) {
 export function buildSyncPayload(spaceGroups, spacesList) {
   if (spaceGroups == null || typeof spaceGroups !== "object" || Array.isArray(spaceGroups)) return null;
   if (!Array.isArray(spaceGroups.groups)) return null;
+  if (!Array.isArray(spacesList)) return null;                              // spacesList must be an array
   if (spaceGroups.spaces == null || typeof spaceGroups.spaces !== "object" || Array.isArray(spaceGroups.spaces)) return null;
   const byId = new Map();
   for (const g of spaceGroups.groups) {
-    if (!g || typeof g !== "object" || Array.isArray(g)) return null;          // every group entry must be an object
-    if (typeof g.id !== "string" && typeof g.id !== "number") return null;     // ... with a string/number id
-    byId.set(String(g.id), g);
+    if (!g || typeof g !== "object" || Array.isArray(g)) return null;       // every group entry must be an object
+    const id = g.id;
+    if (typeof id !== "string" && typeof id !== "number") return null;      // ... with a string/number id
+    if (typeof id === "number" && !Number.isFinite(id)) return null;        // a non-finite id (NaN, Infinity)
+    const key = String(id).trim();
+    if (key === "") return null;                                            // an empty id (after trim)
+    if (byId.has(key)) return null;                                         // a duplicate id (normalised to string)
+    byId.set(key, g);
+  }
+  // Every space assignment must name an existing group, checked before filtering to local spaces
+  // (so a corrupt assignment on a remote or absent space is caught too). Unassigned spaces are null.
+  for (const spid of Object.keys(spaceGroups.spaces)) {
+    const gid = spaceGroups.spaces[spid];
+    if (gid == null) continue;
+    if (!byId.has(String(gid))) return null;
   }
   const folders = new Map();
-  for (const sp of Array.isArray(spacesList) ? spacesList : []) {
+  for (const sp of spacesList) {
     if (!sp || typeof sp !== "object") continue;
     if (sp.machine) continue;  // local machine only
     const gid = spaceGroups.spaces[sp.id];
     if (gid == null) continue;                                   // a space assigned to no group
     if (!byId.has(String(gid))) return null;                     // ... to a group id that does not exist
-    if (typeof sp.folder !== "string" || !/^(\/|[A-Za-z]:[\\/])/.test(sp.folder)) return null;  // a local space needs an absolute folder
+    if (typeof sp.folder !== "string" || !isAbsoluteFolder(sp.folder)) return null;  // a local space needs an absolute folder
     const key = String(gid);
     if (!folders.has(key)) folders.set(key, []);
     folders.get(key).push(sp.folder);
@@ -256,7 +294,7 @@ export function buildSyncPayload(spaceGroups, spacesList) {
   }
   if (groups.length > MAX_GROUPS) return { error: "groups" };
   for (const g of groups) {
-    if (g.name.length > MAX_NAME) return { error: "name" };
+    if (!g.name.trim() || g.name.length > MAX_NAME) return { error: "name" };
     if (g.folders.length > MAX_FOLDERS) return { error: "folders" };
     for (const f of g.folders) if (f.length > MAX_PATH) return { error: "path" };
   }
