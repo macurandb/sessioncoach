@@ -23,8 +23,8 @@ from sessioncoach import cli, herdr, installer, live, paths
 
 SESSION_KEYS = {"pid", "session_id", "cwd", "project", "status", "model", "context_tokens",
                 "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "today_usd",
-                "source", "match"}
-VIEW_KEYS = {"version", "now", "limits", "sessions", "events", "cursor"}
+                "source", "match", "account", "account_id", "group"}
+VIEW_KEYS = {"version", "now", "lang", "limits", "sessions", "accounts", "groups", "events", "cursor"}
 
 
 class Base(unittest.TestCase):
@@ -201,10 +201,15 @@ class Uninstall(Base):
             self.assertEqual(herdr.install(), 0)
         with open(os.path.join(self.mod(), "keep.txt"), "w", encoding="utf-8") as fh:
             fh.write("mine\n")
+        with open(os.path.join(self.mod(), herdr.SYNC_FILE), "w", encoding="utf-8") as fh:
+            fh.write("{}\n")  # staged by the panel: ours too
+        for name in herdr.HERDR_WRITES:  # written by Herdr into every mod folder
+            with open(os.path.join(self.mod(), name), "w", encoding="utf-8") as fh:
+                fh.write("x\n")
         self.assertEqual(herdr.uninstall(), 0)
         self.assertEqual(self.read("keep.txt"), "mine\n")
         self.assertTrue(os.path.isdir(self.mod()))  # folder kept: not empty
-        for name in (*herdr.MOD_FILES, "config.json", herdr.MANIFEST):
+        for name in (*herdr.MOD_FILES, "config.json", herdr.SYNC_FILE, herdr.MANIFEST, *herdr.HERDR_WRITES):
             self.assertFalse(os.path.isfile(os.path.join(self.mod(), name)), name)
 
     def test_uninstall_removes_the_folder_when_empty(self):
@@ -323,6 +328,16 @@ class DemoView(Base):
         # a HOME with no data: the demo still produces a complete view
         live.demo_view(now=1_800_000_000)
         self.assertEqual(os.listdir(paths.HOME), [])
+
+    def test_demo_accounts_and_groups(self):
+        v = live.demo_view(now=1_800_000_000)
+        self.assertEqual(v["lang"], "en")
+        self.assertEqual([a["key"] for a in v["accounts"]], ["personal", "team"])
+        self.assertEqual(v["accounts"][0]["label"], "Personal · Max")
+        self.assertEqual((v["accounts"][0]["five_hour"]["pct"], v["accounts"][0]["seven_day"]["pct"]), (12.0, 51.0))
+        self.assertEqual((v["accounts"][1]["five_hour"]["pct"], v["accounts"][1]["seven_day"]["pct"]), (3.0, 20.0))
+        self.assertEqual([g["id"] for g in v["groups"]], ["pretty", "globex", "daf", "unassigned"])
+        self.assertEqual([s["group"] for s in v["sessions"]], ["pretty", "globex", "unassigned"])
 
 
 class PackageData(unittest.TestCase):

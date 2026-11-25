@@ -148,12 +148,22 @@ def already_sent(con, key):
     return cur.rowcount == 0
 
 
-def pace(con, window, resets_at, now, pct):
-    """Projected epoch when `window` reaches 100 % at the recent pace, or None."""
+def pace(con, window, resets_at, now, pct, root=None, since=None):
+    """Projected epoch when `window` reaches 100 % at the recent pace, or None.
+
+    `root` scopes the lookback to one transcript root's samples, `since` (an epoch) drops samples
+    taken before it (a login switch). Both are optional: existing callers keep the old behaviour."""
     col = "five_pct" if window == "five_hour" else "seven_pct"
     rcol = "five_reset" if window == "five_hour" else "seven_reset"
-    row = con.execute("SELECT ts, %s AS p FROM limits_samples WHERE %s = ? AND ts >= ? ORDER BY ts LIMIT 1"
-                      % (col, rcol), (resets_at, now - PACE_LOOKBACK_S)).fetchone()
+    sql = "SELECT ts, %s AS p FROM limits_samples WHERE %s = ? AND ts >= ?" % (col, rcol)
+    args = [resets_at, now - PACE_LOOKBACK_S]
+    if root is not None:
+        sql += " AND root IS ?"
+        args.append(root)
+    if since is not None:
+        sql += " AND ts >= ?"
+        args.append(since)
+    row = con.execute(sql + " ORDER BY ts LIMIT 1", args).fetchone()
     if not row or row["p"] is None or now - row["ts"] < 300 or pct <= row["p"]:
         return None
     rate = (pct - row["p"]) / (now - row["ts"])  # percent per second

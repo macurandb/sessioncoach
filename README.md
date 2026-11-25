@@ -131,6 +131,7 @@ undo it.
 | `hook-uninstall` | Stop the resume warning. |
 | `alerts` | How close you are to the 5-hour and weekly limits and to your budgets. |
 | `alert-log` | Whether the warnings help: what each said, why, and what you did next. |
+| `group` | Name your clients and see each one's spend today, this week and this month, from the folders they own. |
 | `live` | What your running Claude sessions need now: context, cache expiry and new alerts, as JSON for other tools. |
 | `review` | One change for today from yesterday's numbers, with no tokens spent. |
 | `review-install` | Get the daily review without remembering to ask for it. |
@@ -180,6 +181,8 @@ See [docs/live-json.md](docs/live-json.md) for the `live --json` contract.
 - [Plan limits, alerts and the daily review](docs/alerts-and-review.md): thresholds, budgets, notifications, email.
 - [Projects, companies and Claude accounts](docs/accounts-and-workspaces.md): `projects.json`, `accounts.json`, one
   account per project.
+- [Groups (clients)](docs/groups.md): naming each client, its spend today/week/month, and how the Herdr
+  panel feeds it.
 - [How sessioncoach measures](docs/how-it-measures.md): the cost model, what each figure means, demo and anonymous
   mode.
 - [The settings panel](docs/settings-panel.md): turning practices on and off from the dashboard, per scope.

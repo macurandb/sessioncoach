@@ -10,13 +10,25 @@ removal or a change of meaning bumps the version):
     {
       "version": 1,
       "now": 1795530913,
+      "lang": "en",
       "limits": {"five_hour": {"pct": 22.0, "resets_at": 1795543800},
                  "seven_day": {"pct": 47.0, "resets_at": 1795737600}},
       "sessions": [
         {"pid": 30313, "session_id": "...", "cwd": "/abs/path", "project": "label", "status": "busy",
+         "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "pretty",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": 1795530900,
          "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70,
          "today_usd": 12.40, "source": "transcript", "match": "pid"}
+      ],
+      "accounts": [
+        {"id": "1f8ab3c9d0e2", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 12.40, "sessions": 2,
+         "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
+         "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
+                       "projected_pct": 78.0}}
+      ],
+      "groups": [
+        {"id": "pretty", "label": "Pretty", "today_usd": 10.0, "five_hour_usd": 6.0,
+         "week_usd": 900.0, "sessions": 1}
       ],
       "events": [
         {"id": 1234, "ts": 1795530000, "source": "context_tokens", "session_id": "...",
@@ -32,6 +44,7 @@ the output.
 """
 import datetime as dt
 import glob
+import hashlib
 import json
 import math
 import os
@@ -39,9 +52,9 @@ import re
 import sqlite3
 import time
 
-from . import alertlog, config, cost, paths, pricing, store
+from . import accounts, alertlog, config, cost, limits, paths, pricing, projects, store
 from .collect import encode_dir
-from .projects import Labeler
+from .projects import UNASSIGNED, Labeler
 
 VERSION = 1
 TAIL_BYTES = 256 * 1024  # read at most the last 256 KB of a transcript
@@ -250,11 +263,22 @@ def _apply_info(s, info):
         s["rewrite_usd"] = round(info["context"] * pricing.price(info["model"])[3] / 1e6, 2)
 
 
-def _live_sessions(con=None):
+def _root_of(tpath, roots):
+    """The transcript root `tpath` sits under, or None when it is under none of them."""
+    for r in roots:
+        prefix = os.path.normpath(r)
+        if tpath.startswith(prefix + os.sep):
+            return prefix
+    return None
+
+
+def _live_sessions(con=None, labeler=None):
     """The running sessions, newest first: one entry per live `sessions/*.json` across the
     config dirs, joined to its transcript tail (or, failing that, metrics.db) and filled with
-    today's cost later. `con` is an optional read-only connection for the metrics fallback."""
-    labeler = Labeler.load()
+    today's cost later. `con` is an optional read-only connection for the metrics fallback.
+    Each entry also carries `_root` (its transcript root) and `_tenant` (its group); `view`
+    turns them into the public `account` and `group` keys."""
+    labeler = labeler or Labeler.load()
     roots = paths.transcript_roots()
     out = []
     for cfg in _config_dirs():
@@ -279,13 +303,20 @@ def _live_sessions(con=None):
             cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else None
             tpath = _find_transcript(sid, roots, preferred_root=os.path.join(cfg, "projects"), cwd=cwd) if sid else None
             pdir = os.path.basename(os.path.dirname(tpath)) if tpath else None
+            root = _root_of(tpath, roots) if tpath else None
+            if root is None:  # no transcript: the account is still the one this config dir belongs to
+                root = os.path.normpath(os.path.join(cfg, "projects"))
+            if pdir:
+                proj, tenant = labeler(pdir)
+            else:
+                proj, tenant = (os.path.basename(cwd) if cwd else None), UNASSIGNED
             info = _tail_info(tpath) if tpath else None
-            s = {"pid": pid, "session_id": sid, "cwd": cwd,
-                 "project": labeler(pdir)[0] if pdir else (os.path.basename(cwd) if cwd else None),
+            s = {"pid": pid, "session_id": sid, "cwd": cwd, "project": proj,
                  "status": d.get("status") if isinstance(d.get("status"), str) else None,
                  "model": None, "context_tokens": None, "last_activity": None,
                  "cache_ttl_s": None, "cache_expires_at": None, "rewrite_usd": None,
-                 "today_usd": None, "source": None, "match": "pid"}
+                 "today_usd": None, "source": None, "match": "pid",
+                 "_root": root, "_tenant": tenant, "_account_id": _identity(cfg)}
             if tpath and info:
                 s["source"] = "transcript"
                 _apply_info(s, info)
@@ -358,6 +389,214 @@ def _events(con, since, now, lang):
     return out, cursor
 
 
+def _iso(epoch):
+    """An epoch as a UTC ISO string with the `Z` suffix the transcript rows carry."""
+    return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _identity(path):
+    """First 12 hex of sha256 of a normalised path: a stable, unique identity for one account's
+    config dir (used for both `accounts[].id` and `sessions[].account_id`, so the panel can match
+    them)."""
+    return hashlib.sha256(os.path.normpath(path).encode("utf-8")).hexdigest()[:12]
+
+
+def _plan_word(det):
+    """"Max" | "Team" | "Pro" from an account's org type, else None."""
+    ot = (det.get("org_type") or "").lower()
+    for plan in ("max", "team", "pro"):
+        if ot.endswith(plan):
+            return plan.capitalize()
+    return None
+
+
+def _account_info(root, accs=None):
+    """-> (key, label, plan) for a transcript root. The label is the accounts.json label, else a
+    plan word, else the config dir's basename — never an email or a person's name."""
+    accs = accounts.load_map() if accs is None else accs
+    norm = os.path.normpath(os.path.expanduser(root))
+    det = accounts.detect(root)
+    org = det.get("org_hash")
+    # the account logged in there now wins; the static `roots` mapping only names a dir whose login is unknown
+    for k, v in accs.items():
+        if org and v.get("org_hash") == org:
+            return k, v.get("label") or k, _plan_word(det)
+    for k, v in accs.items():
+        extra = v.get("roots")
+        if isinstance(extra, list) and any(
+                isinstance(r, str) and os.path.normpath(os.path.expanduser(r)) == norm for r in extra):
+            if org and v.get("org_hash") and v.get("org_hash") != org:
+                continue  # that dir is logged into another account now
+            return k, v.get("label") or k, _plan_word(det)
+    plan = _plan_word(det)
+    key = "auto:" + org if org else "unknown"
+    if plan:
+        return key, plan, plan
+    label = os.path.basename(accounts.config_dir_of(root))
+    return key, label or "?", None
+
+
+def _login_since(con, root, tables):
+    """(epoch, seen_at) of the login a config dir has now (the latest `accounts_seen` row), or (None, None).
+
+    A config dir can switch accounts (/login): limits, window spend and today's cost of the account
+    shown count from that switch only, so another account's usage is never added to it."""
+    if "accounts_seen" not in tables:
+        return None, None
+    row = con.execute("SELECT seen_at FROM accounts_seen WHERE root = ? ORDER BY seen_at DESC LIMIT 1",
+                      (root,)).fetchone()
+    t = cost.parse_ts(row["seen_at"]) if row and row["seen_at"] else None
+    return (int(t.timestamp()), row["seen_at"]) if t else (None, None)
+
+
+def _latest_sample(con, root, window, now, since=None):
+    """One root's latest non-null sample of `window` in the last 6 h (and since `since`), as `_limits`
+    does but by root."""
+    pct, reset = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
+    row = con.execute("SELECT %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND root IS ? "
+                      "AND ts >= ? ORDER BY ts DESC LIMIT 1" % (pct, reset, pct),
+                      (root, max(now - LIMITS_STALE_S, since or 0))).fetchone()
+    return {"pct": row["pct"] if row else None, "reset": row["reset"] if row else None}
+
+
+def _projected_pct(pct, resets_at, now):
+    """The 7-day percentage extrapolated to the full window, once 6 h of it have elapsed."""
+    if pct is None or not resets_at:
+        return None
+    elapsed = now - (resets_at - 7 * 86400)
+    if elapsed < 6 * 3600:
+        return None
+    return round(pct * 7 * 86400 / elapsed, 1)
+
+
+def _agg_weight(r):
+    """List-price USD of one aggregated (model, long-prompt) request group — the exact total
+    `pricing.weight` gives for the group's requests, since all of them share the same price tier."""
+    prices, _exact, key = pricing.price_info(r["model"])
+    if r["long"] and key in pricing.LONG_PRICES:
+        prices = pricing.LONG_PRICES[key]
+    pin, pout, pcr, pcw1h, pcw5m = prices
+    return ((r["input"] or 0) * pin + (r["output"] or 0) * pout + (r["cache_read"] or 0) * pcr
+            + (r["cw1h"] or 0) * pcw1h + (r["cw5"] or 0) * pcw5m) / 1e6
+
+
+def _window_rows(con, start_epoch, now, root=None):
+    """(root, project_dir, weight) for the requests with `start_epoch <= ts <= now` (one root, or
+    all), summed in SQL by (root, project_dir, model, long-prompt) and priced in Python: a handful
+    of rows, never one per request. `julianday(ts)` compares at millisecond precision, the
+    precision of Claude Code's timestamps, so a request even 1 ms after `now` is excluded, and `COALESCE` treats NULL token columns as 0
+    exactly as `pricing.weight` does, so the long-prompt tier and the sums match per-row pricing."""
+    lo, hi = _iso(start_epoch), _iso(now)
+    sql = ("SELECT root, project_dir, model, "
+           "CASE WHEN COALESCE(input, 0) + COALESCE(cache_read, 0) + COALESCE(cache_write, 0) > ? "
+           "THEN 1 ELSE 0 END AS long, "
+           "SUM(COALESCE(input, 0)) AS input, SUM(COALESCE(output, 0)) AS output, "
+           "SUM(COALESCE(cache_read, 0)) AS cache_read, "
+           "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN COALESCE(cache_write, 0) "
+           "ELSE COALESCE(cache_write_1h, 0) END) AS cw1h, "
+           "SUM(CASE WHEN cache_write_5m IS NULL AND cache_write_1h IS NULL THEN 0 "
+           "ELSE COALESCE(cache_write_5m, 0) END) AS cw5 "
+           "FROM requests WHERE julianday(ts) >= julianday(?) AND julianday(ts) <= julianday(?)")
+    args = [pricing.LONG_PROMPT, lo, hi]
+    if root is not None:
+        sql += " AND root IS ?"
+        args.append(root)
+    sql += " GROUP BY root, project_dir, model, long"
+    return [(r["root"], r["project_dir"], _agg_weight(r)) for r in con.execute(sql, args)]
+
+
+def _accounts_groups(con, sessions, now, labeler):
+    """The new `accounts` and `groups` keys, aggregated in SQL where possible so 20 000 requests
+    still answer well under a second: a couple of GROUP BY passes, one pass over the window's
+    requests for the list-price sums, and no per-row queries."""
+    tables = _tables(con)
+    has_slices = "cost_slices" in tables
+    has_limits = "limits_samples" in tables
+    has_reqs = "requests" in tables
+    today = dt.date.fromtimestamp(now).isoformat()
+    week_start = (dt.date.fromtimestamp(now) - dt.timedelta(days=6)).isoformat()
+
+    # the roots that matter: a live session, or a limits sample in the last 6 h
+    roots = {s["_root"] for s in sessions if s.get("_root")}
+    if has_limits:
+        for row in con.execute("SELECT DISTINCT root FROM limits_samples WHERE root IS NOT NULL AND ts >= ?",
+                               (now - LIMITS_STALE_S,)):
+            roots.add(row["root"])
+
+    login = {r: _login_since(con, r, tables) for r in roots}
+    samples = {r: {"five": _latest_sample(con, r, "five", now, login[r][0]),
+                   "seven": _latest_sample(con, r, "seven", now, login[r][0])}
+               for r in roots} if has_limits else {}
+
+    root_today, group_today, group_week = {}, {}, {}
+    if has_slices:
+        cols = store.columns(con, "cost_slices")
+        has_root, has_login = "root" in cols, "login_at" in cols
+        sel = "project_dir, day, usd" + (", root" if has_root else "") + (", login_at" if has_login else "")
+        for row in con.execute("SELECT %s FROM cost_slices WHERE day >= ?" % sel, (week_start,)):
+            tenant = labeler(row["project_dir"])[1]
+            group_week[tenant] = group_week.get(tenant, 0.0) + row["usd"]
+            if row["day"] == today:
+                group_today[tenant] = group_today.get(tenant, 0.0) + row["usd"]
+                seen = login.get(row["root"], (None, None))[1] if has_root else None
+                if has_root and (not has_login or seen is None or row["login_at"] == seen):
+                    root_today[row["root"]] = root_today.get(row["root"], 0.0) + row["usd"]
+
+    # window sums, aggregated in SQL by (root, project_dir, model, long-prompt) and priced in Python
+    root_five, root_seven, group_five = {}, {}, {}
+    five_resets = {r: samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")}
+    seven_resets = {r: samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")}
+    global_five_start = min(five_resets.values()) - 5 * 3600 if five_resets else None
+    if has_reqs:
+        for r, reset in five_resets.items():
+            start = max(reset - 5 * 3600, login.get(r, (None,))[0] or 0)
+            root_five[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+        for r, reset in seven_resets.items():
+            start = max(reset - 7 * 86400, login.get(r, (None,))[0] or 0)
+            root_seven[r] = sum(w for _rr, _pd, w in _window_rows(con, start, now, root=r))
+        if global_five_start is not None:
+            for _rr, project_dir, w in _window_rows(con, global_five_start, now):
+                tenant = labeler(project_dir)[1]
+                group_five[tenant] = group_five.get(tenant, 0.0) + w
+
+    accs = accounts.load_map()
+    accounts_out = []
+    for root in sorted(roots):
+        key, label, plan = _account_info(root, accs)
+        f = samples.get(root, {}).get("five", {})
+        s = samples.get(root, {}).get("seven", {})
+        login_epoch = login.get(root, (None,))[0]
+        accounts_out.append({
+            "id": _identity(os.path.dirname(os.path.normpath(root))),
+            "key": key, "label": label, "plan": plan,
+            "today_usd": round(root_today.get(root, 0.0), 2),
+            "sessions": sum(1 for x in sessions if x.get("_root") == root),
+            "five_hour": {"pct": f.get("pct"), "resets_at": f.get("reset"),
+                          "window_usd": round(root_five[root], 2) if root in root_five else None,
+                          "eta": limits.pace(con, "five_hour", f["reset"], now, f["pct"], root=root, since=login_epoch)
+                          if f.get("reset") and f.get("pct") is not None else None},
+            "seven_day": {"pct": s.get("pct"), "resets_at": s.get("reset"),
+                          "window_usd": round(root_seven[root], 2) if root in root_seven else None,
+                          "eta": limits.pace(con, "seven_day", s["reset"], now, s["pct"], root=root, since=login_epoch)
+                          if s.get("reset") and s.get("pct") is not None else None,
+                          "projected_pct": _projected_pct(s.get("pct"), s.get("reset"), now)},
+        })
+
+    labels = projects.group_labels()
+    tenants = set(group_week) | set(group_today) | {x["_tenant"] for x in sessions}
+    groups_out = []
+    for tenant in tenants:
+        groups_out.append({
+            "id": tenant, "label": labels.get(tenant, tenant),
+            "today_usd": round(group_today.get(tenant, 0.0), 2),
+            "five_hour_usd": round(group_five.get(tenant, 0.0), 2) if global_five_start is not None else None,
+            "week_usd": round(group_week.get(tenant, 0.0), 2),
+            "sessions": sum(1 for x in sessions if x.get("_tenant") == tenant),
+        })
+    groups_out.sort(key=lambda g: (g["id"] == UNASSIGNED, -g["week_usd"]))
+    return accounts_out, groups_out
+
+
 def view(now=None, since=None, con=None):
     """The running Claude sessions and what they need, as one JSON document.
 
@@ -368,10 +607,13 @@ def view(now=None, since=None, con=None):
     `cursor` = `since`. A connection `live` opens itself is always closed; a caller-provided
     `con` is never closed."""
     now = int(now if now is not None else time.time())
+    lang = config.notice_lang(config.load_alerts())
     limits = None
     events, cursor = [], since
     sessions = None
+    accounts_out, groups_out = [], []
     owned = None  # the connection `live` opened, kept separate so `finally` always closes it
+    labeler = Labeler.load()
     try:
         if con is None and os.path.exists(paths.db_path()):
             try:
@@ -386,7 +628,7 @@ def view(now=None, since=None, con=None):
                 tables = _tables(con)
             except sqlite3.Error:
                 con, tables = None, set()
-        sessions = _live_sessions(con if "requests" in tables else None)
+        sessions = _live_sessions(con if "requests" in tables else None, labeler=labeler)
         if con is not None:
             try:
                 today = dt.date.fromtimestamp(now).isoformat()
@@ -396,47 +638,75 @@ def view(now=None, since=None, con=None):
                 if "limits_samples" in tables:
                     limits = _limits(con, now)
                 if "alert_events" in tables:
-                    events, cursor = _events(con, since, now, config.notice_lang(config.load_alerts()))
+                    events, cursor = _events(con, since, now, lang)
+                if "cost_slices" in tables or "limits_samples" in tables:
+                    accounts_out, groups_out = _accounts_groups(con, sessions, now, labeler)
             except sqlite3.Error:
                 # any metrics query failing must degrade to the transcript-only view: rebuild
                 # without metrics (today_usd null, no fallback fields, source per transcript only)
                 limits, events, cursor = None, [], since
-                sessions = _live_sessions(None)
+                sessions = _live_sessions(None, labeler=labeler)
+                accounts_out, groups_out = [], []
     finally:
         if owned is not None:
             owned.close()
     if sessions is None:  # an unexpected error in the metrics pass: transcript-only fallback
-        sessions = _live_sessions(None)
+        sessions = _live_sessions(None, labeler=labeler)
     sid_proj = {s["session_id"]: s["project"] for s in sessions if s.get("project")}
     for e in events:
         if e["source"] == "cache_expiry" and e["session_id"] in sid_proj:
             e["body"] = "%s — %s" % (e["body"], sid_proj[e["session_id"]])
-    return {"version": VERSION, "now": now, "limits": limits, "sessions": sessions,
-            "events": events, "cursor": cursor}
+    accs = accounts.load_map()
+    for s in sessions:
+        root = s.pop("_root", None)
+        s["group"] = s.pop("_tenant", None) or UNASSIGNED
+        s["account_id"] = s.pop("_account_id", None)
+        s["account"] = _account_info(root, accs)[0] if root else None
+    return {"version": VERSION, "now": now, "lang": lang, "limits": limits, "sessions": sessions,
+            "accounts": accounts_out, "groups": groups_out, "events": events, "cursor": cursor}
 
 
 def demo_view(now=None):
     """A synthetic `view` with the same contract as `view()`, for screenshots and for trying the
     panel without real data (`sessioncoach live --demo`). It reads nothing from disk: three neutral
-    sessions (one past 300k context, one with an expired cache), the plan limits at 22/47 and two
-    events."""
+    sessions (one past 300k context, one with an expired cache), two accounts, four groups, the plan
+    limits at 22/47 and two events."""
     now = int(now if now is not None else time.time())
     sessions = [
         {"pid": 4242, "session_id": "demo-shop", "cwd": "/home/you/shop", "project": "shop", "status": "busy",
+         "account": "personal", "account_id": "000000000001", "group": "pretty",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": now - 60,
          "cache_ttl_s": 3600, "cache_expires_at": now - 60 + 3600, "rewrite_usd": 2.68,
          "today_usd": 12.40, "source": "transcript", "match": "pid"},
         {"pid": 4243, "session_id": "demo-api", "cwd": "/home/you/api", "project": "api", "status": "busy",
+         "account": "team", "account_id": "000000000002", "group": "globex",
          "model": "claude-sonnet-5-5", "context_tokens": 120000, "last_activity": now - 7200,
          "cache_ttl_s": 3600, "cache_expires_at": now - 7200 + 3600, "rewrite_usd": 0.40,
          "today_usd": 3.10, "source": "transcript", "match": "pid"},
         {"pid": 4244, "session_id": "demo-docs", "cwd": "/home/you/docs", "project": "docs", "status": "idle",
+         "account": "personal", "account_id": "000000000001", "group": "unassigned",
          "model": "claude-haiku-5-5", "context_tokens": 42000, "last_activity": now - 1500,
          "cache_ttl_s": 3600, "cache_expires_at": now - 1500 + 3600, "rewrite_usd": 0.04,
          "today_usd": 0.80, "source": "transcript", "match": "pid"},
     ]
     limits = {"five_hour": {"pct": 22.0, "resets_at": now + 3600},
               "seven_day": {"pct": 47.0, "resets_at": now + 2 * 86400}}
+    accounts = [
+        {"id": "000000000001", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 13.20, "sessions": 2,
+         "five_hour": {"pct": 12.0, "resets_at": now + 3600, "window_usd": 18.0, "eta": None},
+         "seven_day": {"pct": 51.0, "resets_at": now + 2 * 86400, "window_usd": 1535.0, "eta": None,
+                       "projected_pct": 78.0}},
+        {"id": "000000000002", "key": "team", "label": "Team", "plan": "Team", "today_usd": 3.10, "sessions": 1,
+         "five_hour": {"pct": 3.0, "resets_at": now + 5400, "window_usd": 4.0, "eta": None},
+         "seven_day": {"pct": 20.0, "resets_at": now + 86400, "window_usd": 300.0, "eta": None,
+                       "projected_pct": 35.0}},
+    ]
+    groups = [
+        {"id": "pretty", "label": "Pretty", "today_usd": 12.40, "five_hour_usd": 12.40, "week_usd": 900.0, "sessions": 1},
+        {"id": "globex", "label": "Globex", "today_usd": 3.10, "five_hour_usd": 3.10, "week_usd": 500.0, "sessions": 1},
+        {"id": "daf", "label": "DAF", "today_usd": 0.0, "five_hour_usd": 0.0, "week_usd": 300.0, "sessions": 0},
+        {"id": "unassigned", "label": "unassigned", "today_usd": 0.80, "five_hour_usd": 0.80, "week_usd": 80.0, "sessions": 1},
+    ]
     events = [
         {"id": 1, "ts": now - 3600, "source": "five_hour", "session_id": None, "level": "info",
          "title": "Claude · 5 h limit at 22%", "body": "Resets at %s." % time.strftime("%H:%M", time.localtime(now + 3600))},
@@ -444,5 +714,5 @@ def demo_view(now=None):
          "title": "Claude · 335k tokens of context",
          "body": "Every turn re-reads that whole context. /compact or one session per task makes the next turns much cheaper."},
     ]
-    return {"version": VERSION, "now": now, "limits": limits, "sessions": sessions,
-            "events": events, "cursor": 2}
+    return {"version": VERSION, "now": now, "lang": "en", "limits": limits, "sessions": sessions,
+            "accounts": accounts, "groups": groups, "events": events, "cursor": 2}

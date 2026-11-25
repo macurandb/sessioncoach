@@ -580,3 +580,43 @@ class TestMigrationOfAnOlderDatabase(unittest.TestCase):
         old.executescript(store.SCHEMA.split("CREATE TABLE IF NOT EXISTS files_seen")[0])
         self.assertGreater(old.execute("SELECT COUNT(*) FROM requests").fetchone()[0], 0)
         old.close()
+
+
+class TestLivePerf(unittest.TestCase):
+    """`live --json` stays quick with 20 000 requests in the last 7 days: the aggregation is SQL,
+    so the view just returns (no timing assert — the suite's own wall clock would catch a rewrite
+    that turns into a per-row query)."""
+
+    def test_view_with_20000_requests(self):
+        from sessioncoach import live, paths
+        now = 1_800_000_000
+        home = isolate.claude_home(self)  # a temp HOME, so no real ~/.claude/sessions are read
+        tmp = os.path.join(home, "data")
+        os.makedirs(tmp)
+        os.environ["KIT_DATA_DIR"] = tmp
+        self.addCleanup(os.environ.pop, "KIT_DATA_DIR", None)
+        root = os.path.normpath(os.path.join(tmp, "acct", "projects"))
+        os.makedirs(root)
+        con = store.connect(paths.db_path())
+        self.addCleanup(con.close)
+        con.execute("INSERT INTO limits_samples (ts, session_id, root, five_pct, five_reset, seven_pct, seven_reset) "
+                    "VALUES (?,?,?,?,?,?,?)", (now - 60, None, root, 10.0, now + 3600, 20.0, now + 2 * 86400))
+
+        def ts(i):
+            return dt.datetime.fromtimestamp(now - (i % 7) * 86400 - (i % 86400), dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.000Z")
+        con.executemany(
+            "INSERT INTO requests (project_dir, file, msg_id, request_id, session_id, kind, ts, model, input, output, "
+            "cache_read, cache_write, cache_write_5m, cache_write_1h, root) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [("-p", "f.jsonl", "m%d" % i, "r%d" % i, "s%d" % i, "main", ts(i), "claude-opus-5-5",
+              100, 50, 1000, 100, 0, 100, root) for i in range(20000)])
+        today = dt.date.fromtimestamp(now).isoformat()
+        con.execute("INSERT INTO cost_slices (day, project_dir, session_id, model, usd, estimated, root) "
+                    "VALUES (?,?,?,?,?,?,?)", (today, "-p", "s0", "opus-5-5", 5.0, 0, root))
+        con.commit()
+        con.close()
+        v = live.view(now=now)
+        self.assertEqual(v["version"], 1)
+        self.assertEqual(len(v["accounts"]), 1)
+        self.assertEqual(len(v["groups"]), 1)
+        self.assertEqual(v["groups"][0]["id"], "unassigned")

@@ -21,6 +21,8 @@ OK, WARN = "ok", "warn"  # installer.check statuses; herdr stays free of the hea
 MOD_DIR = "sessioncoach"
 MOD_FILES = ("main.js", "mod.json", "icon.svg")
 MANIFEST = ".sessioncoach-manifest.json"
+HERDR_WRITES = ("gpui-kit.d.ts", "jsconfig.json")  # type files Herdr itself writes into every mod folder
+SYNC_FILE = ".groups-sync.json"  # the panel stages the Herdr groups it hands to `sessioncoach group sync-herdr` here
 DEFAULT_HINT = config.LONG_CONTEXT_TOKENS  # 300000: the /compact hint threshold when alerts.json sets none
 
 
@@ -150,7 +152,7 @@ def uninstall(home=None):
         return 0
     # only names we ship: a hand-edited manifest must not point the removal anywhere else
     ours = [f for f in MOD_FILES if f in manifest["files"]]
-    for name in [*ours, "config.json", MANIFEST]:
+    for name in [*ours, "config.json", SYNC_FILE, MANIFEST, *HERDR_WRITES]:
         path = os.path.join(dest, name)
         if os.path.isfile(path):
             os.remove(path)
