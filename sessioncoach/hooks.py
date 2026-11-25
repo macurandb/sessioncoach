@@ -139,6 +139,14 @@ def installed(spec, settings_path=None):
         return False
 
 
+def active_for(spec, cwd=None, cfg_dir=None):
+    """True when Claude Code would run `spec`'s hook for a session in `cwd`: in the project's settings
+    (settings.local.json, settings.json) or the user's (`cfg_dir`, else CLAUDE_CONFIG_DIR, else ~/.claude)."""
+    cfg = cfg_dir or os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(paths.HOME, ".claude")
+    files = [os.path.join(cwd, ".claude", n) for n in ("settings.local.json", "settings.json")] if cwd else []
+    return any(installed(spec, f) for f in [*files, os.path.join(os.path.expanduser(cfg), "settings.json")])
+
+
 def _container(parent, key, kind, where):
     value = parent.setdefault(key, kind())
     if not isinstance(value, kind):

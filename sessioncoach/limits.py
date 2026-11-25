@@ -186,8 +186,6 @@ def observed(ts, now):
     return valid_epoch(ts, now) and ts <= now + SKEW_S
 
 
-_observed = observed  # the name the readers below use
-
 
 def window_sample(con, window, root=None, since=None, now=None):
     """The current plan-limit window for `window` ("five" or "seven"), scoped to `root` (or all roots)
@@ -209,7 +207,7 @@ def window_sample(con, window, root=None, since=None, now=None):
     for r in con.execute("SELECT ts, %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL "
                          "AND %s IS NOT NULL AND ts >= ?%s" % (pct_col, reset_col, pct_col, reset_col, scope),
                          [max(now - LIMITS_STALE_S, since or 0), *extra]):
-        if (_observed(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)
+        if (observed(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)
                 and now < r["reset"] <= now + WINDOW_S[window] and (best_reset is None or r["reset"] > best_reset)):
             best_reset = r["reset"]
     if best_reset is None:
@@ -218,7 +216,7 @@ def window_sample(con, window, root=None, since=None, now=None):
     lo = max(since or 0, best_reset - WINDOW_S[window])
     for r in con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s = ? AND ts >= ?%s"
                          % (pct_col, reset_col, scope), [best_reset, lo, *extra]):
-        if not (_observed(r["ts"], now) and valid_pct(r["pct"])):
+        if not (observed(r["ts"], now) and valid_pct(r["pct"])):
             continue
         if best_pct is None or r["pct"] > best_pct or (r["pct"] == best_pct and r["ts"] < best_ts):
             best_pct, best_ts = r["pct"], r["ts"]
@@ -239,7 +237,7 @@ def envelope_points(con, window, resets_at, lo, hi, now, root=None):
     points = {}
     for r in con.execute(sql, args):
         ts, p = r["ts"], r["p"]
-        if _observed(ts, now) and valid_pct(p) and (ts not in points or p > points[ts]):
+        if observed(ts, now) and valid_pct(p) and (ts not in points or p > points[ts]):
             points[ts] = p
     return points
 

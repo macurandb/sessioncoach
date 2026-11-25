@@ -11,10 +11,10 @@
   price), `sessions[].clear_handoff` (whether `/clear` there gives a free automatic handoff),
   `accounts[].five_hour.usd_per_pct` / `accounts[].seven_day.usd_per_pct` (list-price USD of one
   percentage point of the window, from the first point of the current window since the login to the
-  earliest sample that reached its highest percentage) and `accounts[].groups` (that account's window spend per tenant, adding up to its
-  `window_usd`). The contract stays `"version": 1` (see docs/live-json.md).
+  earliest sample that reached its highest percentage) and `accounts[].groups` (that account's
+  window spend per tenant, adding up to its `window_usd`). The contract stays `"version": 1` (see docs/live-json.md).
 - The decision view is hardened: `clear_handoff` is true only when a free handoff is really offered
-  on return (the resume hook is active **and** the idle guard is on), `usd_per_pct` validates its
+  on return (the prompt and resume hooks are active **and** the idle guard is on), `usd_per_pct` validates its
   samples and never raises on bad ones, the long-prompt tier is applied to `turn_usd`/`rewrite_usd`,
   actions order by rewrite cost, the verdict wraps in a narrow pane, and a corrupt group feed is
   skipped and an over-limit one is reported, instead of clearing every imported rule.

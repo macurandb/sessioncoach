@@ -302,6 +302,7 @@ class ClearHandoff(Base):
             return cwd == "/x/shared"
 
         with mock.patch.object(live.resume, "active_for", side_effect=fake_active), \
+                mock.patch.object(live.nudge, "active_for", return_value=True), \
                 mock.patch.object(live.idleguard, "enabled", return_value=True):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertTrue(sessions["a"]["clear_handoff"])
@@ -316,6 +317,7 @@ class ClearHandoff(Base):
         with open(os.path.join(sdir, "1001.json"), "w", encoding="utf-8") as fh:
             json.dump({"pid": 1001, "sessionId": "a", "cwd": "/x/shared", "status": "busy"}, fh)
         with mock.patch.object(live.resume, "active_for", return_value=True), \
+                mock.patch.object(live.nudge, "active_for", return_value=True), \
                 mock.patch.object(live.idleguard, "enabled", return_value=False):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertFalse(sessions["a"]["clear_handoff"])  # a resume hook alone is not a free handoff
@@ -340,12 +342,52 @@ class ClearHandoff(Base):
             return cfg_dir == cfg_a  # the same cwd, a different answer per config dir
 
         with mock.patch.object(live.resume, "active_for", side_effect=fake_active), \
+                mock.patch.object(live.nudge, "active_for", return_value=True), \
                 mock.patch.object(live.idleguard, "enabled", return_value=True):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertTrue(sessions["a"]["clear_handoff"])
         self.assertFalse(sessions["b"]["clear_handoff"])
         # one call per distinct (config dir, cwd), with the exact dirs and cwd
         self.assertEqual(seen, [(cfg_a, "/x/shared"), (cfg_b, "/x/shared")])
+
+    def write_hooks(self, cfg, *events_cmds):
+        doc = {"hooks": {ev: [{"hooks": [{"type": "command", "command": cmd}]}] for ev, cmd in events_cmds}}
+        with open(os.path.join(cfg, "settings.json"), "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+
+    def one_session(self):
+        cfg = os.path.dirname(self.ra)
+        with open(os.path.join(cfg, "sessions", "1001.json"), "w", encoding="utf-8") as fh:
+            json.dump({"pid": 1001, "sessionId": "a", "cwd": self.home, "status": "busy"}, fh)
+        return cfg
+
+    def handoff_of_a(self):
+        with mock.patch.object(live.idleguard, "enabled", return_value=True):
+            sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
+        self.assertIn("a", sessions)  # the session is listed whatever the settings hold
+        return sessions["a"]["clear_handoff"]
+
+    def test_real_settings_with_both_hooks_offer_the_handoff(self):
+        cfg = self.one_session()
+        self.write_hooks(cfg, ("SessionStart", "sessioncoach hook session-start"),
+                         ("UserPromptSubmit", "sessioncoach hook prompt"))
+        self.assertTrue(self.handoff_of_a())
+
+    def test_without_the_prompt_hook_nothing_is_held_so_no_handoff(self):
+        cfg = self.one_session()
+        self.write_hooks(cfg, ("SessionStart", "sessioncoach hook session-start"))
+        self.assertFalse(self.handoff_of_a())
+
+    def test_a_corrupt_hook_command_keeps_the_view(self):
+        cfg = self.one_session()
+        self.write_hooks(cfg, ("SessionStart", 42), ("UserPromptSubmit", ["sessioncoach hook prompt"]))
+        self.assertFalse(self.handoff_of_a())
+
+    def test_usd_per_pct_needs_a_dict(self):
+        con = self.connect()
+        for bad in (None, [], "x", True):
+            with self.subTest(latest=bad):
+                self.assertIsNone(live._usd_per_pct(con, self.ra, "seven", bad, now=NOW))
 
 
 class StaleSamples(Base):

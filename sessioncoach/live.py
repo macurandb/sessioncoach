@@ -55,7 +55,7 @@ import re
 import sqlite3
 import time
 
-from . import accounts, alertlog, config, cost, idleguard, limits, paths, pricing, projects, resume, store
+from . import accounts, alertlog, config, cost, idleguard, limits, nudge, paths, pricing, projects, resume, store
 from .collect import encode_dir
 from .projects import UNASSIGNED, Labeler
 
@@ -339,7 +339,9 @@ def _live_sessions(con=None, labeler=None):
             if cwd:
                 key = (cfg, cwd)
                 if key not in handoff:
-                    handoff[key] = resume.active_for(cwd, cfg_dir=cfg)
+                    # the free handoff on return needs both hooks: the prompt hook holds the first prompt
+                    # after the pause back (recording it), the resume hook turns /clear into its digest
+                    handoff[key] = resume.active_for(cwd, cfg_dir=cfg) and nudge.active_for(cwd, cfg_dir=cfg)
                 s["clear_handoff"] = handoff[key] and idle_guard
             out.append(s)
     out.sort(key=lambda s: -(s["last_activity"] or 0))
@@ -534,6 +536,8 @@ def _usd_per_pct(con, root, window, latest, since=None, now=None):
     before `t1`, the percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller
     delta is mostly rounding), nothing was spent, or the rounded result is not > 0."""
     now = int(now if now is not None else time.time())
+    if not isinstance(latest, dict):
+        return None
     reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
     if not (limits.valid_epoch(reset, now) and limits.observed(t1, now) and limits.valid_pct(p1)):
         return None
@@ -607,7 +611,7 @@ def _accounts_groups(con, sessions, now, labeler):
     # window sums, aggregated in SQL by (root, project_dir, model, long-prompt) and priced in Python
     root_five, root_seven, group_five = {}, {}, {}
     root_five_tenants, root_seven_tenants = {}, {}  # per-root window spend split by tenant (accounts[].groups)
-    five_ppc, seven_ppc = {}, {}  # USD per percentage point, from the earliest to the latest sample
+    five_ppc, seven_ppc = {}, {}  # USD per percentage point, from the first point of the window to the earliest sample at its max
     five_resets = {r: samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")}
     seven_resets = {r: samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")}
     global_five_start = min(five_resets.values()) - 5 * 3600 if five_resets else None

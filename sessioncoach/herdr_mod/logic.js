@@ -253,6 +253,11 @@ function isAbsoluteFolder(folder) {
   return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(folder);
 }
 
+// Length in code points, as Python's len() counts them, so the limits match sync-herdr's exactly.
+function cpLength(s) {
+  return [...s].length;
+}
+
 // One normalisation for group ids and the references to them: a string or a finite number, trimmed.
 // null for anything else (arrays, objects, booleans, NaN), which the caller treats as corrupt.
 export function normGroupId(v) {
@@ -261,8 +266,9 @@ export function normGroupId(v) {
 }
 
 // A Herdr space entry the sync can trust: an object with a string id, a string folder ("" is that
-// machine's home) and a machine that is absent or null (this computer) or a non-empty string (another
-// machine), as Herdr's SpaceInfo has it. An empty id or any other machine value is corrupt.
+// machine's home) and a machine that is absent, null or "" (this computer) or a non-empty string (another
+// machine), as Herdr's SpaceInfo has it. An empty id or any other machine value is corrupt. Space ids are
+// Herdr's own keys and are matched exactly (only group ids are trimmed).
 function validSpace(sp) {
   return sp != null && typeof sp === "object" && !Array.isArray(sp) && typeof sp.id === "string"
     && sp.id.trim() !== "" && typeof sp.folder === "string" && (sp.machine == null || typeof sp.machine === "string");
@@ -317,9 +323,9 @@ export function buildSyncPayload(spaceGroups, spacesList) {
   }
   if (groups.length > MAX_GROUPS) return { error: "groups" };
   for (const g of groups) {
-    if (!g.name.trim() || g.name.length > MAX_NAME) return { error: "name" };
+    if (!g.name.trim() || cpLength(g.name) > MAX_NAME) return { error: "name" };
     if (g.folders.length > MAX_FOLDERS) return { error: "folders" };
-    for (const f of g.folders) if (f.length > MAX_PATH) return { error: "path" };
+    for (const f of g.folders) if (cpLength(f) > MAX_PATH) return { error: "path" };
   }
   return { groups };
 }

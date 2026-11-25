@@ -323,6 +323,15 @@ try {
     [{ id: "s", folder: "/y" }, { id: "t", folder: "/x" }]),
     { groups: [{ name: "Acme", folders: ["/x"] }] });  // s: null is an unassigned space, not corruption
 
+  // ---- round 7: limits count code points like Python; machine "" is this computer ----
+  const emoji = "😀".repeat(60);  // 60 code points, 120 UTF-16 units: within the 100 limit
+  assert.deepEqual(L.buildSyncPayload({ groups: [{ id: "acme", name: emoji }], spaces: { s: "acme" } }, [{ id: "s", folder: "/x" }]),
+    { groups: [{ name: emoji, folders: ["/x"] }] });
+  assert.deepEqual(L.buildSyncPayload({ groups: [{ id: "acme", name: "😀".repeat(101) }], spaces: { s: "acme" } }, [{ id: "s", folder: "/x" }]),
+    { error: "name" });
+  assert.deepEqual(L.buildSyncPayload({ groups: [{ id: "acme", name: "Acme" }], spaces: { s: "acme" } }, [{ id: "s", folder: "/x", machine: "" }]),
+    { groups: [{ name: "Acme", folders: ["/x"] }] });
+
   console.log("logic.js ok");
 } finally {
   rmSync(dir, { recursive: true, force: true });
