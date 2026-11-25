@@ -196,7 +196,8 @@ sessions may be listed there). Each object:
   session's config dir (or its project settings) **and** the idle guard is on (`alerts.json` →
   `nudge.block` is true). That is the flow that gives it: the prompt hook holds the first prompt after
   a pause back and records it, the resume hook turns the following `/clear` into the automatic digest.
-  `false` when any part is missing (a resume hook alone does not promise a free handoff). The panel only promises a free handoff when
+  `false` when any part is missing (a resume hook alone does not promise a free handoff).
+  The panel only promises a free handoff when
   this is `true`.
 - `today_usd` — the session's recorded cost today (`cost_slices`, the local day), or `null`.
 - `source` — where the numbers came from: `"transcript"` (the transcript tail), `"metrics"`

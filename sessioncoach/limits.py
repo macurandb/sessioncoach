@@ -186,7 +186,6 @@ def observed(ts, now):
     return valid_epoch(ts, now) and ts <= now + SKEW_S
 
 
-
 def window_sample(con, window, root=None, since=None, now=None):
     """The current plan-limit window for `window` ("five" or "seven"), scoped to `root` (or all roots)
     and `since` (an epoch a login switched: samples before it are dropped): `(reset, pct, ts)` or

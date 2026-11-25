@@ -611,7 +611,8 @@ def _accounts_groups(con, sessions, now, labeler):
     # window sums, aggregated in SQL by (root, project_dir, model, long-prompt) and priced in Python
     root_five, root_seven, group_five = {}, {}, {}
     root_five_tenants, root_seven_tenants = {}, {}  # per-root window spend split by tenant (accounts[].groups)
-    five_ppc, seven_ppc = {}, {}  # USD per percentage point, from the first point of the window to the earliest sample at its max
+    # USD per percentage point, from the window's first point to the earliest sample at its max
+    five_ppc, seven_ppc = {}, {}
     five_resets = {r: samples[r]["five"]["reset"] for r in roots if samples.get(r, {}).get("five", {}).get("reset")}
     seven_resets = {r: samples[r]["seven"]["reset"] for r in roots if samples.get(r, {}).get("seven", {}).get("reset")}
     global_five_start = min(five_resets.values()) - 5 * 3600 if five_resets else None
