@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `sessioncoach live --json` adds `sessions[].turn_usd` (what each further turn re-reads, list
+  price), `sessions[].clear_handoff` (whether `/clear` there gives a free automatic handoff),
+  `accounts[].five_hour.usd_per_pct` / `accounts[].seven_day.usd_per_pct` (list-price USD of one
+  percentage point of the window, from the earliest to the latest sample of the current window since
+  the login) and `accounts[].groups` (that account's window spend per tenant, adding up to its
+  `window_usd`). The contract stays `"version": 1` (see docs/live-json.md).
 - `sessioncoach group` names your clients and reports each one's spend today, this week and this
   month; `group sync-herdr` takes the clients made with the `herdr-space-groups` mod.
   See docs/groups.md. Its writes are serialised by an operating-system lock, a

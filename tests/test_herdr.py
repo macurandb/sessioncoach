@@ -22,8 +22,8 @@ from sessioncoach import __file__ as _pkg_init
 from sessioncoach import cli, herdr, installer, live, paths
 
 SESSION_KEYS = {"pid", "session_id", "cwd", "project", "status", "model", "context_tokens",
-                "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "today_usd",
-                "source", "match", "account", "account_id", "group"}
+                "last_activity", "cache_ttl_s", "cache_expires_at", "rewrite_usd", "turn_usd",
+                "today_usd", "clear_handoff", "source", "match", "account", "account_id", "group"}
 VIEW_KEYS = {"version", "now", "lang", "limits", "sessions", "accounts", "groups", "events", "cursor"}
 
 
@@ -336,8 +336,8 @@ class DemoView(Base):
         self.assertEqual(v["accounts"][0]["label"], "Personal · Max")
         self.assertEqual((v["accounts"][0]["five_hour"]["pct"], v["accounts"][0]["seven_day"]["pct"]), (12.0, 51.0))
         self.assertEqual((v["accounts"][1]["five_hour"]["pct"], v["accounts"][1]["seven_day"]["pct"]), (3.0, 20.0))
-        self.assertEqual([g["id"] for g in v["groups"]], ["pretty", "globex", "daf", "unassigned"])
-        self.assertEqual([s["group"] for s in v["sessions"]], ["pretty", "globex", "unassigned"])
+        self.assertEqual([g["id"] for g in v["groups"]], ["acme", "globex", "initech", "unassigned"])
+        self.assertEqual([s["group"] for s in v["sessions"]], ["acme", "globex", "unassigned"])
 
 
 class PackageData(unittest.TestCase):

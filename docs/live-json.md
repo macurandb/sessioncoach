@@ -89,9 +89,13 @@ each with:
   "plan": "Max",
   "today_usd": 12.40,
   "sessions": 2,
-  "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
-  "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
-                "projected_pct": 78.0}
+  "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "usd_per_pct": 1.5, "eta": null},
+  "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "usd_per_pct": 30.1, "eta": null,
+                "projected_pct": 78.0},
+  "groups": [
+    {"id": "acme", "five_hour_usd": 17.2, "seven_day_usd": 1455.0},
+    {"id": "unassigned", "five_hour_usd": 0.8, "seven_day_usd": 80.0}
+  ]
 }
 ```
 
@@ -109,6 +113,19 @@ each with:
   of that root's `requests` whose `ts` falls in `[resets_at - window, now]` (5 hours, or 7 days);
   `eta` is `limits.pace(...)`. The seven-day window adds `projected_pct` — `pct` extrapolated to the
   full 7 days once at least 6 h of the window have elapsed, else `null`.
+- `usd_per_pct` (each window) — list-price USD that one percentage point of that window costs on
+  this account, so the panel can turn "a further turn re-reads X %" into dollars and back. It is
+  **not** `window_usd / pct` (that would be wrong when the login switch happened inside the
+  window): it is computed between the earliest sample of the *current* window — the first sample
+  with the same `resets_at`, since the login (`accounts_seen`), and *not* limited to the last 6 h —
+  and the latest sample, as `usd / (p1 − p0)`, where `usd` is the list-price USD of that root's
+  `requests` with `t0 < ts <= t1`. It is `null` when the percentage delta between the two samples is
+  below 5 points (`pct` is a whole number, so a smaller delta is mostly rounding), when nothing was
+  spent in that span, or when there are not two samples.
+- `groups` — the account's window spend per tenant, as `{"id", "five_hour_usd", "seven_day_usd"}`
+  rows. The two windows are exactly the ones `five_hour.window_usd` / `seven_day.window_usd` sum
+  over, so the rows add up to them (modulo rounding). Ordered by `seven_day_usd` descending, with
+  `"unassigned"` last; tenants with no spend in either window are omitted.
 
 ### `groups`
 
@@ -156,6 +173,11 @@ sessions may be listed there). Each object:
 - `cache_expires_at` — `last_activity` + `cache_ttl_s`.
 - `rewrite_usd` — `context_tokens` × the model's cache-write price, list price, as an estimate of
   what returning after expiry re-writes.
+- `turn_usd` — `context_tokens` × the model's cache-read price, list price: what each further turn
+  re-reads of that context. `null` when `context_tokens` is `null` (no model/usage read).
+- `clear_handoff` — `true` when `/clear` in this session's working directory would get
+  sessioncoach's automatic handoff (the resume hook is installed for that directory), else
+  `false`. The panel only promises a free handoff when this is `true`.
 - `today_usd` — the session's recorded cost today (`cost_slices`, the local day), or `null`.
 - `source` — where the numbers came from: `"transcript"` (the transcript tail), `"metrics"`
   (the tail had no usage, so the latest `requests` row was used) or `null` (no numbers
@@ -163,8 +185,8 @@ sessions may be listed there). Each object:
 - `match` — always `"pid"`: how the session was found to be live.
 
 A session whose transcript is missing is still listed, with `source` `null` and `model`,
-`context_tokens`, `last_activity`, `cache_ttl_s`, `cache_expires_at` and `rewrite_usd` set to
-`null`. A session whose transcript tail has no usage line falls back to `metrics.db` (`source`
+`context_tokens`, `last_activity`, `cache_ttl_s`, `cache_expires_at`, `rewrite_usd` and `turn_usd`
+set to `null`. A session whose transcript tail has no usage line falls back to `metrics.db` (`source`
 `"metrics"`); if there is no such row there either, the numbers stay `null`.
 
 ### `events`
