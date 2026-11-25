@@ -109,6 +109,25 @@ class Install(Base):
         self.assertEqual(new["hint_min_tokens"], 300000)
         self.assertNotIn("args_prefix", new)
 
+    def test_mod_files_include_logic_js(self):
+        self.assertIn("logic.js", herdr.MOD_FILES)
+
+    def test_upgrade_from_a_three_file_install_adds_logic_js(self):
+        # an install made before logic.js shipped has no logic.js and no manifest entry for it:
+        # re-running herdr-install must copy it in and rebuild the manifest, not refuse as "edited"
+        os.makedirs(self.app())
+        with mock.patch("shutil.which", return_value="/usr/bin/sessioncoach"):
+            self.assertEqual(herdr.install(), 0)
+        os.remove(os.path.join(self.mod(), "logic.js"))
+        manifest = json.loads(self.read(herdr.MANIFEST))
+        del manifest["files"]["logic.js"]
+        with open(os.path.join(self.mod(), herdr.MANIFEST), "w", encoding="utf-8") as fh:
+            json.dump(manifest, fh)
+        with mock.patch("shutil.which", return_value="/usr/bin/sessioncoach"):
+            self.assertEqual(herdr.install(), 0)
+        self.assertTrue(os.path.isfile(os.path.join(self.mod(), "logic.js")))
+        self.assertEqual(sorted(json.loads(self.read(herdr.MANIFEST))["files"]), sorted(herdr.MOD_FILES))
+
     def test_which_missing_uses_sys_executable(self):
         os.makedirs(self.app())
         with mock.patch("shutil.which", return_value=None):

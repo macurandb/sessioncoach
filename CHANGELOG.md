@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The Herdr panel becomes a decision view: a per-account verdict (am I OK this week), a NOW list of
+  what to do right now (each action priced as a share of the week), and the clients / sessions /
+  alerts folded under it. It also feeds the `herdr-space-groups` assignments back into
+  `sessioncoach group sync-herdr` (`sync_herdr_groups`, default on); the panel's pure logic ships in
+  a `logic.js` file so it is testable with node. See docs/herdr.md.
 - `sessioncoach live --json` adds `sessions[].turn_usd` (what each further turn re-reads, list
   price), `sessions[].clear_handoff` (whether `/clear` there gives a free automatic handoff),
   `accounts[].five_hour.usd_per_pct` / `accounts[].seven_day.usd_per_pct` (list-price USD of one
