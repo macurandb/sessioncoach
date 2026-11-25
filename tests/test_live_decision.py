@@ -11,7 +11,7 @@ from unittest import mock
 
 import isolate
 
-from sessioncoach import live, store
+from sessioncoach import limits, live, store
 
 NOW = 1_800_000_000
 
@@ -275,6 +275,80 @@ class ClearHandoff(Base):
                 mock.patch.object(live.idleguard, "enabled", return_value=False):
             sessions = {s["session_id"]: s for s in live.view(now=NOW)["sessions"]}
         self.assertFalse(sessions["a"]["clear_handoff"])  # a resume hook alone is not a free handoff
+
+
+class StaleSamples(Base):
+    """Idle sessions re-record their last response's pct with a fresh ts, so `limits_samples` holds
+    interleaved stale rows (same ts, lower pct). The current window's real pct never decreases, so
+    every read takes the MAX over that reset's samples — limits, accounts, usd_per_pct and pace."""
+
+    def test_stale_rows_do_not_flap_limits_or_accounts_pct(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        # real data: at the same second, rows with seven_pct 54, 53, 50, 44, 43, 38, 34
+        for pct in (54.0, 53.0, 50.0, 44.0, 43.0, 38.0, 34.0):
+            self.sample(con, self.ra, NOW - 60, seven_pct=pct, seven_reset=seven_reset)
+        con.commit()
+        v = self.view()
+        self.assertEqual(v["limits"]["seven_day"]["pct"], 54.0)
+        self.assertEqual(v["limits"]["seven_day"]["resets_at"], seven_reset)
+        self.assertEqual(v["accounts"][0]["seven_day"]["pct"], 54.0)
+
+    def test_stale_rows_do_not_flap_usd_per_pct(self):
+        con = self.connect()
+        seven_reset = NOW + 86400
+        self.sample(con, self.ra, NOW - 3600, seven_pct=20.0, seven_reset=seven_reset)
+        self.request(con, self.ra, NOW - 1800)  # $1 between the two samples
+        self.sample(con, self.ra, NOW - 60, seven_pct=50.0, seven_reset=seven_reset)
+        for pct in (50.0, 44.0, 38.0, 34.0):  # stale redraws re-recorded later, same reset
+            self.sample(con, self.ra, NOW - 30, seven_pct=pct, seven_reset=seven_reset)
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertAlmostEqual(a["seven_day"]["usd_per_pct"], 0.03, places=2)  # $1 / 30 points, not 14
+
+    def test_an_older_resets_rows_written_now_are_ignored(self):
+        con = self.connect()
+        old_reset, new_reset = NOW - 3600, NOW + 86400
+        self.sample(con, self.ra, NOW - 60, seven_pct=99.0, seven_reset=old_reset)
+        self.sample(con, self.ra, NOW - 60, seven_pct=40.0, seven_reset=new_reset)
+        con.commit()
+        a = self.view()["accounts"][0]
+        self.assertEqual(a["seven_day"]["pct"], 40.0)
+        self.assertEqual(a["seven_day"]["resets_at"], new_reset)
+
+    def test_pace_stale_rows_do_not_change_the_eta(self):
+        con = self.connect()
+        reset = NOW + 3600
+        self.sample(con, self.ra, NOW - 1200, five_pct=40.0, five_reset=reset)
+        self.sample(con, self.ra, NOW - 60, five_pct=60.0, five_reset=reset)
+        con.commit()
+        eta = limits.pace(con, "five_hour", reset, NOW, 60.0, root=self.ra)
+        self.assertIsNotNone(eta)
+        for pct in (34.0, 38.0, 44.0):  # stale redraws re-recorded later: the eta must not move
+            self.sample(con, self.ra, NOW - 30, five_pct=pct, five_reset=reset)
+        con.commit()
+        self.assertEqual(limits.pace(con, "five_hour", reset, NOW, 60.0, root=self.ra), eta)
+
+    def test_pace_a_real_rise_still_projects(self):
+        con = self.connect()
+        reset = NOW + 3600
+        self.sample(con, self.ra, NOW - 1200, five_pct=40.0, five_reset=reset)
+        self.sample(con, self.ra, NOW - 60, five_pct=60.0, five_reset=reset)
+        con.commit()
+        eta = limits.pace(con, "five_hour", reset, NOW, 60.0, root=self.ra)
+        self.assertIsNotNone(eta)
+        self.assertLess(eta, reset)
+
+    def test_pace_with_only_stale_rows_gives_no_false_eta(self):
+        con = self.connect()
+        reset = NOW + 3600
+        # the genuine rise happened more than 30 min ago (outside the lookback); since then only
+        # stale low rows land inside it, so the pace must not fake a "hits 100 %" projection.
+        self.sample(con, self.ra, NOW - 3600, five_pct=73.0, five_reset=reset)
+        for ago in (600, 400, 200):
+            self.sample(con, self.ra, NOW - ago, five_pct=34.0, five_reset=reset)
+        con.commit()
+        self.assertIsNone(limits.pace(con, "five_hour", reset, NOW, 73.0, root=self.ra))
 
 
 class Demo(unittest.TestCase):

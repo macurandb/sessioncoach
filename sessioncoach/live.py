@@ -59,7 +59,7 @@ from .projects import UNASSIGNED, Labeler
 VERSION = 1
 TAIL_BYTES = 256 * 1024  # read at most the last 256 KB of a transcript
 DEFAULT_TTL_S = 3600  # the cache lifetime of subscription sessions, when the tail says nothing
-LIMITS_STALE_S = 6 * 3600  # a plan-limit sample older than this is not shown
+LIMITS_STALE_S = limits.LIMITS_STALE_S  # a plan-limit sample older than this is not shown (owned by limits.py)
 MIN_PCT_DELTA = 5  # pct is a whole number: a smaller sample delta is mostly rounding, not real spend
 EVENT_WINDOW_S = 24 * 3600  # without `since`, the newest alerts of the last 24 h
 MAX_EVENTS = 50
@@ -177,15 +177,13 @@ def _int_or_none(v):
 
 
 def _valid_pct(v):
-    """A plan-limit sample percentage: an int/float (not bool), finite and 0..100. Anything else
-    (text, JSON-ish text, NaN/inf, bool, negatives, over 100) is not a percentage `live` can use."""
-    return (isinstance(v, (int, float)) and not isinstance(v, bool)
-            and math.isfinite(v) and 0 <= v <= 100)
+    """A plan-limit sample percentage (delegates to the shared validator in limits.py)."""
+    return limits.valid_pct(v)
 
 
-def _valid_epoch(v):
-    """A plan-limit sample timestamp: a finite, positive number (an epoch second)."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0
+def _valid_epoch(v, now=None):
+    """A plan-limit sample timestamp (delegates to the shared validator in limits.py)."""
+    return limits.valid_epoch(v, now)
 
 
 def _ttl(u):
@@ -369,13 +367,15 @@ def _today_usd(con, day, session_id):
 
 
 def _limits(con, now):
-    """Each window's latest non-null sample (any session) of the last 6 h, or None when neither has one.
-    A sample can carry one window only, so the newest row alone may leave the other null."""
+    """Each window's current sample (any session) from the last 6 h, or None when neither has one.
+
+    Read through `limits.window_sample`, so a stale redraw (an idle session re-recording an older,
+    lower pct with a fresh ts) can never flap the shown percentage: within one window the real pct
+    only grows, so the MAX over that reset's samples is the truth. A corrupt sample is skipped."""
     out = {}
-    for key, pct, reset in (("five_hour", "five_pct", "five_reset"), ("seven_day", "seven_pct", "seven_reset")):
-        row = con.execute("SELECT %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND ts >= ? "
-                          "ORDER BY ts DESC LIMIT 1" % (pct, reset, pct), (now - LIMITS_STALE_S,)).fetchone()
-        out[key] = {"pct": row["pct"] if row else None, "resets_at": row["reset"] if row else None}
+    for key, window in (("five_hour", "five"), ("seven_day", "seven")):
+        reset, pct, _ts = limits.window_sample(con, window, now=now)
+        out[key] = {"pct": pct, "resets_at": reset}
     if all(v["pct"] is None for v in out.values()):
         return None
     return out
@@ -475,18 +475,11 @@ def _login_since(con, root, tables):
 
 
 def _latest_sample(con, root, window, now, since=None):
-    """One root's latest non-null sample of `window` in the last 6 h (and since `since`), as `_limits`
-    does but by root. `ts` is returned too so `usd_per_pct` can span the two samples. A sample whose
-    `pct` or `reset` is not a usable number is treated as missing (a corrupt row must never leak into
-    arithmetic or the output)."""
-    pct, reset = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
-    row = con.execute("SELECT ts, %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL AND root IS ? "
-                      "AND ts >= ? ORDER BY ts DESC LIMIT 1" % (pct, reset, pct),
-                      (root, max(now - LIMITS_STALE_S, since or 0))).fetchone()
-    pct_v, reset_v, ts_v = (row["pct"], row["reset"], row["ts"]) if row else (None, None, None)
-    return {"ts": ts_v if _valid_epoch(ts_v) else None,
-            "pct": pct_v if _valid_pct(pct_v) else None,
-            "reset": reset_v if _valid_epoch(reset_v) else None}
+    """One root's current sample of `window`, as `_limits` does but by root: the current window's
+    `reset`, the MAX valid `pct` across its samples (stale redraws cannot flap it) and the `ts` of
+    the earliest sample that reached that max, so `usd_per_pct` can span the two samples."""
+    reset, pct, ts = limits.window_sample(con, window, root=root, since=since, now=now)
+    return {"ts": ts, "pct": pct, "reset": reset}
 
 
 def _projected_pct(pct, resets_at, now):
@@ -537,26 +530,27 @@ def _window_rows(con, start_epoch, now, root=None, strict_lo=False):
     return [(r["root"], r["project_dir"], _agg_weight(r)) for r in con.execute(sql, args)]
 
 
-def _usd_per_pct(con, root, window, latest, since=None):
+def _usd_per_pct(con, root, window, latest, since=None, now=None):
     """List-price USD one percentage point of `window` costs on `root`, or None.
 
-    `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`). Spend is measured
-    from the earliest sample of the *current* window — the first with the same `reset`, since the
-    login (`since`), not limited to the last 6 h — to the latest: the root's requests with
-    `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a sample is missing or unusable, the
-    percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller delta is mostly
-    rounding), nothing was spent, or the rounded result is not > 0. A bad latest sample yields None;
-    a bad earliest sample is skipped for the next valid one."""
+    `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`) — so `p1` is already
+    the MAX valid pct of the current window and `t1` the earliest sample that reached it, immune to
+    stale redraws. Spend is measured from the earliest sample of the *current* window — the first
+    with the same `reset`, since the login (`since`), not limited to the last 6 h — to the latest:
+    the root's requests with `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a sample is
+    missing or unusable, the percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a
+    smaller delta is mostly rounding), nothing was spent, or the rounded result is not > 0. A bad
+    latest sample yields None; a bad earliest sample is skipped for the next valid one."""
     pct_col, reset_col = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
     reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
-    if reset is None or t1 is None or not _valid_pct(p1):
+    if reset is None or t1 is None or not limits.valid_pct(p1):
         return None
     rows = con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s IS NOT NULL AND %s = ? "
                        "AND root IS ? AND ts >= ? ORDER BY ts ASC"
                        % (pct_col, pct_col, reset_col), (reset, root, since or 0))
     row = None
     for r in rows:
-        if _valid_epoch(r["ts"]) and _valid_pct(r["pct"]):
+        if limits.valid_epoch(r["ts"], now) and limits.valid_pct(r["pct"]):
             row = r
             break
     if row is None or p1 - row["pct"] < MIN_PCT_DELTA:
@@ -646,8 +640,8 @@ def _accounts_groups(con, sessions, now, labeler):
             root_seven[r], root_seven_tenants[r] = total, tenants
         for r in roots:
             login_epoch = login.get(r, (None,))[0]
-            five_ppc[r] = _usd_per_pct(con, r, "five", samples.get(r, {}).get("five", {}), login_epoch)
-            seven_ppc[r] = _usd_per_pct(con, r, "seven", samples.get(r, {}).get("seven", {}), login_epoch)
+            five_ppc[r] = _usd_per_pct(con, r, "five", samples.get(r, {}).get("five", {}), login_epoch, now)
+            seven_ppc[r] = _usd_per_pct(con, r, "seven", samples.get(r, {}).get("seven", {}), login_epoch, now)
         if global_five_start is not None:
             for _rr, project_dir, w in _window_rows(con, global_five_start, now):
                 tenant = labeler(project_dir)[1]

@@ -57,6 +57,10 @@
   and the days before Code Mode. Tools run inside a REPL block count; REPL and Poll do not.
 - On macOS, an alert that terminal-notifier cannot show (its notifications not allowed yet in System Settings) goes
   out through osascript instead of being lost.
+- Fixed: a redraw re-records each idle session's last API response, so `limits_samples` gained rows with a fresh
+  timestamp but an old, lower percentage; `live --json` and the pace projection now read each window's percentage as
+  the MAX of its samples (the real value never decreases within a window), so the shown week % and `usd_per_pct` no
+  longer flap and a stale low row can no longer fake a "hits 100 %" pace alert.
 
 ## 0.1.1 - 2026-10-26
 

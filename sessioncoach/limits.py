@@ -11,6 +11,7 @@ Only numbers are stored: percentages, reset times, context use, model id, sessio
 import contextlib
 import copy
 import json
+import math
 import os
 import subprocess
 import sys
@@ -55,6 +56,8 @@ def msg(key, **kw):
 def hhmm(epoch):
     return time.strftime("%H:%M", time.localtime(epoch))
 PACE_LOOKBACK_S = 30 * 60
+LIMITS_STALE_S = 6 * 3600  # a plan-limit sample older than this is not shown (live.py imports this)
+EPOCH_MIN = 1577836800  # 2020-01-01 UTC: a timestamp before this is not a real sample
 
 
 load_alerts = config.load_alerts  # lives in config; kept here for older callers
@@ -148,26 +151,103 @@ def already_sent(con, key):
     return cur.rowcount == 0
 
 
+def valid_pct(v):
+    """A plan-limit percentage: an int/float (not bool), finite and 0..100. Anything else (text,
+    JSON-ish text, NaN/inf, bool, negatives, over 100) is not a percentage the limit math can use.
+    Shared by live.py and limits.pace so a corrupt `limits_samples` row never leaks into arithmetic
+    or the JSON output (which would otherwise emit Infinity)."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and math.isfinite(v) and 0 <= v <= 100)
+
+
+def valid_epoch(v, now=None):
+    """A plan-limit sample timestamp or reset (an epoch second): an int/float (not bool), finite and
+    within [2020-01-01, now + 8 days]. Resets far in the future or past (a corrupt 1e308, a pre-2020
+    date) are not real windows and are ignored."""
+    now = time.time() if now is None else now
+    return (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+            and EPOCH_MIN <= v <= now + 8 * 86400)
+
+
+def window_sample(con, window, root=None, since=None, now=None):
+    """The current plan-limit window for `window`, scoped to `root` (or all roots) and `since` (an
+    epoch a login switched: samples before it are dropped): `(reset, pct, ts)` or
+    `(None, None, None)`.
+
+    Within one window (the same `*_reset`) the real percentage never decreases, but an idle session's
+    redraw re-records its last response with a fresh `ts`, so the newest row flaps and the earliest row
+    is a stale low value. The current window is therefore the greatest valid `*_reset` among the samples
+    of the last `LIMITS_STALE_S`, its pct is the MAX of the valid `*_pct` values for that reset, and its
+    ts is the earliest sample that reached that max. A sample whose pct, reset or ts is not a usable
+    number is skipped.
+    """
+    now = int(now if now is not None else time.time())
+    pct_col, reset_col = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
+    sql = ("SELECT ts, %s AS pct, %s AS reset FROM limits_samples "
+           "WHERE %s IS NOT NULL AND %s IS NOT NULL AND ts >= ?"
+           % (pct_col, reset_col, pct_col, reset_col))
+    args = [max(now - LIMITS_STALE_S, since or 0)]
+    if root is not None:
+        sql += " AND root IS ?"
+        args.append(root)
+    best_reset = best_pct = best_ts = None
+    for r in con.execute(sql, args):
+        if not (valid_epoch(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)):
+            continue
+        if best_reset is None or r["reset"] > best_reset:
+            best_reset, best_pct, best_ts = r["reset"], r["pct"], r["ts"]
+        elif r["reset"] == best_reset and (r["pct"] > best_pct or (r["pct"] == best_pct and r["ts"] < best_ts)):
+            best_pct, best_ts = r["pct"], r["ts"]
+    return best_reset, best_pct, best_ts
+
+
 def pace(con, window, resets_at, now, pct, root=None, since=None):
     """Projected epoch when `window` reaches 100 % at the recent pace, or None.
 
     `root` scopes the lookback to one transcript root's samples, `since` (an epoch) drops samples
-    taken before it (a login switch). Both are optional: existing callers keep the old behaviour."""
+    taken before it (a login switch). Both are optional: existing callers keep the old behaviour.
+
+    The pace is read off the window's envelope — env(t) = the MAX valid pct among the samples with
+    `ts <= t` (same reset, root, since) — because an idle session's redraw re-records an old, lower
+    pct with a fresh `ts`. `p_start` is env(now - PACE_LOOKBACK_S), or, when no sample is that old,
+    the first sample in the lookback (and its `ts`); `p_now` is max(`pct`, env(now)). Stale rows
+    written later can then neither lower `p_start` below the true value nor fake a rise."""
     col = "five_pct" if window == "five_hour" else "seven_pct"
     rcol = "five_reset" if window == "five_hour" else "seven_reset"
+    floor = now - PACE_LOOKBACK_S
     sql = "SELECT ts, %s AS p FROM limits_samples WHERE %s = ? AND ts >= ?" % (col, rcol)
-    args = [resets_at, now - PACE_LOOKBACK_S]
+    args = [resets_at, since if since is not None else 0]
     if root is not None:
         sql += " AND root IS ?"
         args.append(root)
-    if since is not None:
-        sql += " AND ts >= ?"
-        args.append(since)
-    row = con.execute(sql + " ORDER BY ts LIMIT 1", args).fetchone()
-    if not row or row["p"] is None or now - row["ts"] < 300 or pct <= row["p"]:
+    running = env_floor = env_now = None
+    first_after = None
+    for r in con.execute(sql + " ORDER BY ts ASC", args):
+        ts, p = r["ts"], r["p"]
+        if not (valid_epoch(ts, now) and valid_pct(p)):
+            continue
+        if ts > now:
+            break
+        if running is None or p > running:
+            running = p
+        if ts <= floor:
+            env_floor = running
+        elif first_after is None:
+            first_after = (ts, running)
+        env_now = running
+    if env_floor is not None:
+        t_start, p_start = floor, env_floor
+    elif first_after is not None:
+        t_start, p_start = first_after
+    else:
         return None
-    rate = (pct - row["p"]) / (now - row["ts"])  # percent per second
-    return int(now + (100 - pct) / rate)
+    p_now = pct if valid_pct(pct) else None
+    if env_now is not None and (p_now is None or env_now > p_now):
+        p_now = env_now
+    if p_now is None or p_now <= p_start or now - t_start < 300:
+        return None
+    rate = (p_now - p_start) / (now - t_start)  # percent per second
+    return int(now + (100 - p_now) / rate)
 
 
 def record_and_alert(con, data, now=None, cfg=None, root=None):
