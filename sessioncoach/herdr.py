@@ -19,7 +19,7 @@ from . import __version__, config, paths
 
 OK, WARN = "ok", "warn"  # installer.check statuses; herdr stays free of the heavy installer import
 MOD_DIR = "sessioncoach"
-MOD_FILES = ("main.js", "logic.js", "mod.json", "icon.svg")
+MOD_FILES = ("main.js", "mod.json", "icon.svg")
 MANIFEST = ".sessioncoach-manifest.json"
 HERDR_WRITES = ("gpui-kit.d.ts", "jsconfig.json")  # type files Herdr itself writes into every mod folder
 SYNC_FILE = ".groups-sync.json"  # the panel stages the Herdr groups it hands to `sessioncoach group sync-herdr` here

@@ -43,7 +43,7 @@ sessioncoach = "sessioncoach.cli:main"
 packages = ["sessioncoach", "sessioncoach.harnesses"]
 
 [tool.setuptools.package-data]
-sessioncoach = ["web/*.html", "herdr_mod/main.js", "herdr_mod/logic.js", "herdr_mod/mod.json", "herdr_mod/icon.svg"]
+sessioncoach = ["web/*.html", "herdr_mod/main.js", "herdr_mod/mod.json", "herdr_mod/icon.svg"]
 
 [tool.setuptools.dynamic]
 version = {attr = "sessioncoach.__version__"}

@@ -48,9 +48,10 @@ that belong to no group, by their 30-day spend.
 ## Where Herdr groups feed it
 
 The community mod `herdr-space-groups` keeps the client each space belongs to in Herdr's shared key
-`"space-groups"` (`{groups: [...], spaces: {<space id>: <group id>}}`). The sessioncoach panel reads
-that key, turns it into the `sync-herdr` input — one `{name, folders}` per group, from the local
-spaces only — and runs `sessioncoach group sync-herdr` with it.
+`"space-groups"` (`{groups: [...], spaces: {<space id>: <group id>}}`). Any tool that turns that key
+into the `sync-herdr` input — one `{name, folders}` per group, from the local spaces only — can run
+`sessioncoach group sync-herdr` with it; the sessioncoach Herdr panel will do it on its own in a
+coming version.
 
 `sync-herdr` replaces **only** the rules with `"source": "herdr"`; rules you wrote by hand or with
 the CLI are never touched. It creates a missing group (label = name; a nested name like
@@ -79,7 +80,6 @@ while reading for display still works.
 
 ## Who uses groups
 
-- **The Herdr panel** — one row per group: today, 5 hours and the week.
 - **`live --json`** — the `"groups"` list, and each session's `"group"` key
   ([docs/live-json.md](live-json.md)).
 - The dashboard, budgets and the daily review already used the tenant; naming it in `"groups"` only
