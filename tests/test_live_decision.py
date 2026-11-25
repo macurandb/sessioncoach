@@ -442,6 +442,91 @@ class StaleSamples(Base):
         self.assertIsNotNone(a["five_hour"]["eta"])  # a real rise still projects
 
 
+
+class EnvelopeEdges(Base):
+    """Round 5 of QA: same-second rows, the 6 h discovery boundary, ended windows, future samples,
+    unusable latest values and arithmetic that would overflow."""
+
+    def setUp(self):
+        super().setUp()
+        self.con = self.connect()
+        self.reset = NOW + 86400
+
+    def both_orders(self, rows, check):
+        for order in (rows, list(reversed(rows))):
+            with self.subTest(order=[r[1] for r in order]):
+                self.con.execute("DELETE FROM limits_samples")
+                for ts, pct in order:
+                    self.sample(self.con, self.ra, ts, seven_pct=pct, seven_reset=self.reset)
+                check()
+
+    def test_pace_start_takes_the_max_of_its_second(self):
+        # 34 is a stale redraw written in the same second as the real 54: the start is 54 either way
+        def check():
+            self.assertIsNone(limits.pace(self.con, "seven_day", self.reset, NOW, 54, root=self.ra))
+        self.both_orders([(NOW - 1200, 34), (NOW - 1200, 54)], check)
+
+    def test_usd_per_pct_start_takes_the_max_of_its_second(self):
+        self.request(self.con, self.ra, NOW - 3000)  # $3.75 between the two points
+
+        def check():
+            latest = {"reset": self.reset, "pct": 40, "ts": NOW - 60}
+            self.sample(self.con, self.ra, NOW - 60, seven_pct=40, seven_reset=self.reset)
+            usd = sum(w for _r, _p, w in live._window_rows(self.con, NOW - 3600, NOW - 60, root=self.ra, strict_lo=True))
+            self.assertGreater(usd, 0)
+            self.assertEqual(live._usd_per_pct(self.con, self.ra, "seven", latest, now=NOW), round(usd / 20, 2))
+        self.both_orders([(NOW - 3600, 10), (NOW - 3600, 20)], check)
+
+    def test_the_max_does_not_drop_when_it_ages_past_six_hours(self):
+        self.sample(self.con, self.ra, NOW - limits.LIMITS_STALE_S, seven_pct=54, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW - 60, seven_pct=34, seven_reset=self.reset)
+        for now in (NOW, NOW + 1, NOW + 3600):
+            with self.subTest(now=now):
+                self.assertEqual(limits.window_sample(self.con, "seven", root=self.ra, now=now)[1], 54)
+
+    def test_an_ended_window_is_not_current(self):
+        self.sample(self.con, self.ra, NOW - 600, seven_pct=80, seven_reset=NOW - 300)
+        self.assertEqual(limits.window_sample(self.con, "seven", root=self.ra, now=NOW), (None, None, None))
+        self.assertIsNone(limits.pace(self.con, "seven_day", NOW - 300, NOW, 80, root=self.ra))
+
+    def test_future_samples_are_not_observations(self):
+        self.sample(self.con, self.ra, NOW - 60, seven_pct=54, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW + 86400, seven_pct=99, seven_reset=self.reset)
+        self.assertEqual(limits.window_sample(self.con, "seven", root=self.ra, now=NOW), (self.reset, 54, NOW - 60))
+        self.sample(self.con, self.ra, NOW + 60, seven_pct=55, seven_reset=self.reset)  # within the skew: counts
+        self.assertEqual(limits.window_sample(self.con, "seven", root=self.ra, now=NOW)[1], 55)
+
+    def test_usd_per_pct_rejects_unusable_latest_values(self):
+        self.sample(self.con, self.ra, NOW - 3600, seven_pct=10, seven_reset=self.reset)
+        self.request(self.con, self.ra, NOW - 3000)
+        for latest in ({"reset": self.reset, "pct": 50, "ts": 1e308},
+                       {"reset": self.reset, "pct": 50, "ts": "bad"},
+                       {"reset": 1e308, "pct": 50, "ts": NOW - 60},
+                       {"reset": self.reset, "pct": 50, "ts": NOW - 3600},  # t0 is not before t1
+                       {"reset": self.reset, "pct": True, "ts": NOW - 60}):
+            with self.subTest(latest=latest):
+                self.assertIsNone(live._usd_per_pct(self.con, self.ra, "seven", latest, now=NOW))
+
+    def test_pace_never_raises_on_extreme_rates(self):
+        self.sample(self.con, self.ra, NOW - 1200, seven_pct=0, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW - 60, seven_pct=5e-324, seven_reset=self.reset)
+        self.assertIsNone(limits.pace(self.con, "seven_day", self.reset, NOW, 5e-324, root=self.ra))
+        for bad in (1e308, "x", True, NOW - 1):
+            with self.subTest(resets_at=bad):
+                self.assertIsNone(limits.pace(self.con, "seven_day", bad, NOW, 50, root=self.ra))
+
+    def test_pace_reads_only_the_window(self):
+        # a sample from before this window's start, with the same reset value, is not part of the window
+        self.sample(self.con, self.ra, self.reset - 8 * 86400, seven_pct=1, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW - 1200, seven_pct=50, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW - 60, seven_pct=52, seven_reset=self.reset)
+        eta = limits.pace(self.con, "seven_day", self.reset, NOW, 52, root=self.ra)
+        self.assertEqual(eta, int(NOW + 48 / (2 / 1200)))  # from the 50 at NOW-1200, not the out-of-window 1
+
+    def test_validators_never_raise_on_huge_ints(self):
+        self.assertFalse(limits.valid_pct(10 ** 1000))
+        self.assertFalse(limits.valid_epoch(10 ** 1000, NOW))
+
 class Demo(unittest.TestCase):
     def test_demo_has_the_new_fields_and_neutral_names(self):
         v = live.demo_view(now=NOW)

@@ -222,8 +222,18 @@ export function buildActions(view, hintMinTokens) {
 
 // A toast/event links to a terminal only when its session_id names exactly one linked session:
 // two sessions sharing an id are ambiguous, so clicking could focus the wrong terminal.
-export function unambiguousLink(matches) {
+export function unambiguousLink(matches, total) {
+  if (total !== undefined && total !== 1) return undefined;  // another session shares this id, linked or not
   return Array.isArray(matches) && matches.length === 1 ? matches[0] : undefined;
+}
+
+// session_id -> how many sessions of the poll carry it, linked to a terminal or not.
+export function sessionIdCounts(sessions) {
+  const counts = new Map();
+  for (const s of Array.isArray(sessions) ? sessions : []) {
+    if (s && typeof s === "object" && s.session_id != null) counts.set(s.session_id, (counts.get(s.session_id) || 0) + 1);
+  }
+  return counts;
 }
 
 // UTF-8 byte length of a string, so the staging payload can be checked against readTextFile's
@@ -243,45 +253,57 @@ function isAbsoluteFolder(folder) {
   return /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(folder);
 }
 
+// One normalisation for group ids and the references to them: a string or a finite number, trimmed.
+// null for anything else (arrays, objects, booleans, NaN), which the caller treats as corrupt.
+export function normGroupId(v) {
+  if (typeof v === "string" || (typeof v === "number" && Number.isFinite(v))) return String(v).trim();
+  return null;
+}
+
+// A Herdr space entry the sync can trust: an object with a string id, a string folder ("" is that
+// machine's home) and a machine that is absent, null, a boolean or a string (truthy: a remote machine).
+function validSpace(sp) {
+  return sp != null && typeof sp === "object" && !Array.isArray(sp) && typeof sp.id === "string"
+    && typeof sp.folder === "string" && (sp.machine == null || typeof sp.machine === "boolean" || typeof sp.machine === "string");
+}
+
 // Build the `group sync-herdr` payload from the herdr-space-groups shared value and the local
-// spaces. Returns null when the shared value is not usable OR the input is corrupt (no sync, so a
-// corrupt input can never become an empty feed that clears every imported rule); `{error: <code>}`
+// spaces. Returns null when the shared value is not usable OR any part of the input is corrupt (a
+// bad group, a bad or dangling assignment, a bad space entry, a non-absolute local folder): no sync,
+// so a corrupt input can never become an empty feed that clears every imported rule. `{error: <code>}`
 // when it is valid but exceeds sync-herdr's limits (no sync, the caller shows an error); otherwise
 // `{groups: [{name, folders}]}` — possibly `{groups: []}` when no group has a local space, which
-// clears every imported assignment. Nothing is truncated: an over-limit name, path or count is
-// reported, not silently cut.
+// clears every imported assignment. A local space whose folder is "" (Herdr's home of that machine)
+// is skipped: sync-herdr omits the home anyway. Nothing is truncated.
 export function buildSyncPayload(spaceGroups, spacesList) {
   if (spaceGroups == null || typeof spaceGroups !== "object" || Array.isArray(spaceGroups)) return null;
   if (!Array.isArray(spaceGroups.groups)) return null;
-  if (!Array.isArray(spacesList)) return null;                              // spacesList must be an array
+  if (!Array.isArray(spacesList)) return null;
   if (spaceGroups.spaces == null || typeof spaceGroups.spaces !== "object" || Array.isArray(spaceGroups.spaces)) return null;
   const byId = new Map();
   for (const g of spaceGroups.groups) {
-    if (!g || typeof g !== "object" || Array.isArray(g)) return null;       // every group entry must be an object
-    const id = g.id;
-    if (typeof id !== "string" && typeof id !== "number") return null;      // ... with a string/number id
-    if (typeof id === "number" && !Number.isFinite(id)) return null;        // a non-finite id (NaN, Infinity)
-    const key = String(id).trim();
-    if (key === "") return null;                                            // an empty id (after trim)
-    if (byId.has(key)) return null;                                         // a duplicate id (normalised to string)
+    if (!g || typeof g !== "object" || Array.isArray(g)) return null;
+    const key = normGroupId(g.id);
+    if (key == null || key === "" || byId.has(key)) return null;  // bad, empty or duplicate id
     byId.set(key, g);
   }
-  // Every space assignment must name an existing group, checked before filtering to local spaces
-  // (so a corrupt assignment on a remote or absent space is caught too). Unassigned spaces are null.
+  // Every assignment must name an existing group, checked before filtering to local spaces (so a
+  // corrupt assignment on a remote or absent space is caught too). Unassigned spaces are null.
   for (const spid of Object.keys(spaceGroups.spaces)) {
     const gid = spaceGroups.spaces[spid];
     if (gid == null) continue;
-    if (!byId.has(String(gid))) return null;
+    const key = normGroupId(gid);
+    if (key == null || !byId.has(key)) return null;
   }
+  for (const sp of spacesList) if (!validSpace(sp)) return null;
   const folders = new Map();
   for (const sp of spacesList) {
-    if (!sp || typeof sp !== "object") continue;
     if (sp.machine) continue;  // local machine only
     const gid = spaceGroups.spaces[sp.id];
-    if (gid == null) continue;                                   // a space assigned to no group
-    if (!byId.has(String(gid))) return null;                     // ... to a group id that does not exist
-    if (typeof sp.folder !== "string" || !isAbsoluteFolder(sp.folder)) return null;  // a local space needs an absolute folder
-    const key = String(gid);
+    if (gid == null) continue;  // a space assigned to no group
+    if (sp.folder === "") continue;  // the machine's home: sync-herdr omits it
+    if (!isAbsoluteFolder(sp.folder)) return null;
+    const key = normGroupId(gid);
     if (!folders.has(key)) folders.set(key, []);
     folders.get(key).push(sp.folder);
   }
@@ -289,7 +311,7 @@ export function buildSyncPayload(spaceGroups, spacesList) {
   for (const [gid, g] of byId) {
     const fs = folders.get(gid);
     if (!fs || !fs.length) continue;
-    const name = (g && typeof g.name === "string" && g.name.trim()) || gid;
+    const name = (typeof g.name === "string" && g.name.trim()) || gid;
     groups.push({ name: String(name), folders: fs });
   }
   if (groups.length > MAX_GROUPS) return { error: "groups" };
@@ -299,4 +321,17 @@ export function buildSyncPayload(spaceGroups, spacesList) {
     for (const f of g.folders) if (f.length > MAX_PATH) return { error: "path" };
   }
   return { groups };
+}
+
+// What the panel does with one poll's sync input, as data: "clear" (nothing to do, and any old error
+// line goes: sync off, no usable or a corrupt payload, or the payload already applied), "error" (no
+// write, show `error`: over sync-herdr's limits, or a staging file too large to read back) or "write"
+// (stage `text` and run sync-herdr).
+export function syncDecision(enabled, payload, lastApplied, maxBytes) {
+  if (!enabled || payload == null) return { action: "clear" };
+  if (payload.error) return { action: "error", error: payload.error };
+  const text = JSON.stringify(payload);
+  if (text === lastApplied) return { action: "clear" };
+  if (utf8Bytes(text) > maxBytes) return { action: "error", error: "size" };
+  return { action: "write", text };
 }

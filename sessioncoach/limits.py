@@ -151,54 +151,92 @@ def already_sent(con, key):
     return cur.rowcount == 0
 
 
+def _finite(v):
+    """math.isfinite without the OverflowError a huge int (10**1000) raises."""
+    try:
+        return math.isfinite(v)
+    except OverflowError:
+        return False
+
+
 def valid_pct(v):
     """A plan-limit percentage: an int/float (not bool), finite and 0..100. Anything else (text,
     JSON-ish text, NaN/inf, bool, negatives, over 100) is not a percentage the limit math can use.
     Shared by live.py and limits.pace so a corrupt `limits_samples` row never leaks into arithmetic
-    or the JSON output (which would otherwise emit Infinity)."""
-    return (isinstance(v, (int, float)) and not isinstance(v, bool)
-            and math.isfinite(v) and 0 <= v <= 100)
+    or the JSON output (which would otherwise emit Infinity). Never raises."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v) and 0 <= v <= 100
 
 
 def valid_epoch(v, now=None):
     """A plan-limit sample timestamp or reset (an epoch second): an int/float (not bool), finite and
     within [2020-01-01, now + 8 days]. Resets far in the future or past (a corrupt 1e308, a pre-2020
-    date) are not real windows and are ignored."""
+    date) are not real windows and are ignored. Never raises."""
     now = time.time() if now is None else now
-    return (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    return (isinstance(v, (int, float)) and not isinstance(v, bool) and _finite(v)
             and EPOCH_MIN <= v <= now + 8 * 86400)
 
 
+SKEW_S = 120  # a sample a little ahead of this clock (another process's clock) still counts as observed
+WINDOW_S = {"five": 5 * 3600, "seven": 7 * 86400, "five_hour": 5 * 3600, "seven_day": 7 * 86400}
+
+
+def _observed(ts, now):
+    """A sample timestamp that has already happened (within SKEW_S)."""
+    return valid_epoch(ts, now) and ts <= now + SKEW_S
+
+
 def window_sample(con, window, root=None, since=None, now=None):
-    """The current plan-limit window for `window`, scoped to `root` (or all roots) and `since` (an
-    epoch a login switched: samples before it are dropped): `(reset, pct, ts)` or
+    """The current plan-limit window for `window` ("five" or "seven"), scoped to `root` (or all roots)
+    and `since` (an epoch a login switched: samples before it are dropped): `(reset, pct, ts)` or
     `(None, None, None)`.
 
     Within one window (the same `*_reset`) the real percentage never decreases, but an idle session's
-    redraw re-records its last response with a fresh `ts`, so the newest row flaps and the earliest row
-    is a stale low value. The current window is therefore the greatest valid `*_reset` among the samples
-    of the last `LIMITS_STALE_S`, its pct is the MAX of the valid `*_pct` values for that reset, and its
-    ts is the earliest sample that reached that max. A sample whose pct, reset or ts is not a usable
-    number is skipped.
-    """
+    redraw re-records its last response with a fresh `ts`, so the newest row flaps and a late row can
+    carry a stale low value. The samples of the last `LIMITS_STALE_S` only *discover* the current
+    window: the greatest valid `*_reset` still in the future (a window whose reset has passed is over).
+    Its pct is then the MAX valid pct over all of that window's samples since `since` (not just the
+    last 6 h, so the max cannot drop as it ages), and its ts the earliest sample that reached it. A
+    sample whose pct, reset or ts is unusable, or whose ts is in the future, is skipped."""
     now = int(now if now is not None else time.time())
     pct_col, reset_col = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
-    sql = ("SELECT ts, %s AS pct, %s AS reset FROM limits_samples "
-           "WHERE %s IS NOT NULL AND %s IS NOT NULL AND ts >= ?"
-           % (pct_col, reset_col, pct_col, reset_col))
-    args = [max(now - LIMITS_STALE_S, since or 0)]
+    scope, extra = (" AND root IS ?", [root]) if root is not None else ("", [])
+    best_reset = None
+    for r in con.execute("SELECT ts, %s AS pct, %s AS reset FROM limits_samples WHERE %s IS NOT NULL "
+                         "AND %s IS NOT NULL AND ts >= ?%s" % (pct_col, reset_col, pct_col, reset_col, scope),
+                         [max(now - LIMITS_STALE_S, since or 0), *extra]):
+        if (_observed(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)
+                and r["reset"] > now and (best_reset is None or r["reset"] > best_reset)):
+            best_reset = r["reset"]
+    if best_reset is None:
+        return None, None, None
+    best_pct = best_ts = None
+    lo = max(since or 0, best_reset - WINDOW_S[window])
+    for r in con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s = ? AND ts >= ?%s"
+                         % (pct_col, reset_col, scope), [best_reset, lo, *extra]):
+        if not (_observed(r["ts"], now) and valid_pct(r["pct"])):
+            continue
+        if best_pct is None or r["pct"] > best_pct or (r["pct"] == best_pct and r["ts"] < best_ts):
+            best_pct, best_ts = r["pct"], r["ts"]
+    if best_pct is None:
+        return None, None, None
+    return best_reset, best_pct, best_ts
+
+
+def envelope_points(con, window, resets_at, lo, hi, now, root=None):
+    """{ts: MAX valid pct at that ts} for one window's samples with `lo <= ts <= hi`: rows written in the
+    same second collapse to their max, so the envelope never depends on insertion order."""
+    pct_col, reset_col = ("five_pct", "five_reset") if window in ("five", "five_hour") else ("seven_pct", "seven_reset")
+    sql = "SELECT ts, %s AS p FROM limits_samples WHERE %s = ? AND ts >= ? AND ts <= ?" % (pct_col, reset_col)
+    args = [resets_at, lo, hi]
     if root is not None:
         sql += " AND root IS ?"
         args.append(root)
-    best_reset = best_pct = best_ts = None
+    points = {}
     for r in con.execute(sql, args):
-        if not (valid_epoch(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)):
-            continue
-        if best_reset is None or r["reset"] > best_reset:
-            best_reset, best_pct, best_ts = r["reset"], r["pct"], r["ts"]
-        elif r["reset"] == best_reset and (r["pct"] > best_pct or (r["pct"] == best_pct and r["ts"] < best_ts)):
-            best_pct, best_ts = r["pct"], r["ts"]
-    return best_reset, best_pct, best_ts
+        ts, p = r["ts"], r["p"]
+        if _observed(ts, now) and valid_pct(p) and (ts not in points or p > points[ts]):
+            points[ts] = p
+    return points
 
 
 def pace(con, window, resets_at, now, pct, root=None, since=None):
@@ -208,28 +246,20 @@ def pace(con, window, resets_at, now, pct, root=None, since=None):
     taken before it (a login switch). Both are optional: existing callers keep the old behaviour.
 
     The pace is read off the window's envelope — env(t) = the MAX valid pct among the samples with
-    `ts <= t` (same reset, root, since) — because an idle session's redraw re-records an old, lower
-    pct with a fresh `ts`. `p_start` is env(now - PACE_LOOKBACK_S), or, when no sample is that old,
-    the first sample in the lookback (and its `ts`); `p_now` is max(`pct`, env(now)). Stale rows
-    written later can then neither lower `p_start` below the true value nor fake a rise."""
-    col = "five_pct" if window == "five_hour" else "seven_pct"
-    rcol = "five_reset" if window == "five_hour" else "seven_reset"
+    `ts <= t` (same reset, root, since; rows of one second collapsed to their max) — because an idle
+    session's redraw re-records an old, lower pct with a fresh `ts`. `p_start` is
+    env(now - PACE_LOOKBACK_S), or, when no sample is that old, the envelope at the first sample in the
+    lookback (and its `ts`); `p_now` is max(`pct`, env(now)). The read is bounded to the window
+    (`resets_at` minus its length). None for an unusable or past `resets_at`, and whenever the rate
+    or the eta is not a usable number."""
+    if not valid_epoch(resets_at, now) or resets_at <= now:
+        return None
     floor = now - PACE_LOOKBACK_S
-    sql = "SELECT ts, %s AS p FROM limits_samples WHERE %s = ? AND ts >= ?" % (col, rcol)
-    args = [resets_at, since if since is not None else 0]
-    if root is not None:
-        sql += " AND root IS ?"
-        args.append(root)
-    running = env_floor = env_now = None
-    first_after = None
-    for r in con.execute(sql + " ORDER BY ts ASC", args):
-        ts, p = r["ts"], r["p"]
-        if not (valid_epoch(ts, now) and valid_pct(p)):
-            continue
-        if ts > now:
-            break
-        if running is None or p > running:
-            running = p
+    lo = max(resets_at - WINDOW_S[window], since or 0)
+    points = envelope_points(con, window, resets_at, lo, now + SKEW_S, now, root=root)
+    running = env_floor = env_now = first_after = None
+    for ts in sorted(points):
+        running = points[ts] if running is None or points[ts] > running else running
         if ts <= floor:
             env_floor = running
         elif first_after is None:
@@ -247,7 +277,13 @@ def pace(con, window, resets_at, now, pct, root=None, since=None):
     if p_now is None or p_now <= p_start or now - t_start < 300:
         return None
     rate = (p_now - p_start) / (now - t_start)  # percent per second
-    return int(now + (100 - p_now) / rate)
+    if not (_finite(rate) and rate > 0):
+        return None
+    try:
+        eta = now + (100 - p_now) / rate
+    except (OverflowError, ZeroDivisionError):
+        return None
+    return int(eta) if _finite(eta) else None
 
 
 def record_and_alert(con, data, now=None, cfg=None, root=None):

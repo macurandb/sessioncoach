@@ -60,7 +60,9 @@
 - Fixed: a redraw re-records each idle session's last API response, so `limits_samples` gained rows with a fresh
   timestamp but an old, lower percentage; `live --json` and the pace projection now read each window's percentage as
   the MAX of its samples (the real value never decreases within a window), so the shown week % and `usd_per_pct` no
-  longer flap and a stale low row can no longer fake a "hits 100 %" pace alert.
+  longer flap and a stale low row can no longer fake a "hits 100 %" pace alert. Rows of the same second count as
+  their highest value, the max no longer drops after 6 h, an ended window is not reported, samples dated in the
+  future are ignored, and the pace reads only its own window.
 - The group sync is hardened: a corrupt or duplicate group id, a space assigned to a missing group, a non-array space
   list and a name past the limit are all refused before any write; the staged payload is checked against the 1 MiB
   read limit, a negative idle reads "0 min", UNC folders count as absolute, and sync errors are stable localized lines

@@ -176,16 +176,6 @@ def _int_or_none(v):
         return None
 
 
-def _valid_pct(v):
-    """A plan-limit sample percentage (delegates to the shared validator in limits.py)."""
-    return limits.valid_pct(v)
-
-
-def _valid_epoch(v, now=None):
-    """A plan-limit sample timestamp (delegates to the shared validator in limits.py)."""
-    return limits.valid_epoch(v, now)
-
-
 def _ttl(u):
     """The cache lifetime a usage wrote with, via `pricing.cache_ttl_s` on a normalised row: the
     transcript's usage becomes the request columns pricing already understands, so the null-
@@ -533,32 +523,29 @@ def _window_rows(con, start_epoch, now, root=None, strict_lo=False):
 def _usd_per_pct(con, root, window, latest, since=None, now=None):
     """List-price USD one percentage point of `window` costs on `root`, or None.
 
-    `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`) — so `p1` is already
-    the MAX valid pct of the current window and `t1` the earliest sample that reached it, immune to
-    stale redraws. Spend is measured from the earliest sample of the *current* window — the first
-    with the same `reset`, since the login (`since`), not limited to the last 6 h — to the latest:
-    the root's requests with `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a sample is
-    missing or unusable, the percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a
-    smaller delta is mostly rounding), nothing was spent, or the rounded result is not > 0. A bad
-    latest sample yields None; a bad earliest sample is skipped for the next valid one."""
-    pct_col, reset_col = ("five_pct", "five_reset") if window == "five" else ("seven_pct", "seven_reset")
+    `latest` is `_latest_sample`'s dict for the window (`pct`, `reset`, `ts`): `p1` is the MAX valid
+    pct of the current window (its envelope) and `t1` the earliest sample that reached it, so stale
+    redraws cannot move either. `p0`/`t0` is the first observed point of the same window since the
+    login (`since`), rows of one second collapsed to their max. Spend is the root's requests with
+    `t0 < ts <= t1`, priced in SQL by `_window_rows`. None when a value is unusable, `t0` is not
+    before `t1`, the percentage delta is under `MIN_PCT_DELTA` (pct is a whole number, so a smaller
+    delta is mostly rounding), nothing was spent, or the rounded result is not > 0."""
+    now = int(now if now is not None else time.time())
     reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
-    if reset is None or t1 is None or not limits.valid_pct(p1):
+    if not (limits.valid_epoch(reset, now) and limits.valid_epoch(t1, now) and limits.valid_pct(p1)):
         return None
-    rows = con.execute("SELECT ts, %s AS pct FROM limits_samples WHERE %s IS NOT NULL AND %s = ? "
-                       "AND root IS ? AND ts >= ? ORDER BY ts ASC"
-                       % (pct_col, pct_col, reset_col), (reset, root, since or 0))
-    row = None
-    for r in rows:
-        if limits.valid_epoch(r["ts"], now) and limits.valid_pct(r["pct"]):
-            row = r
-            break
-    if row is None or p1 - row["pct"] < MIN_PCT_DELTA:
+    lo = max(since or 0, reset - limits.WINDOW_S[window])
+    points = limits.envelope_points(con, window, reset, lo, t1, now, root=root)
+    if not points:
         return None
-    usd = sum(w for _r, _p, w in _window_rows(con, row["ts"], t1, root=root, strict_lo=True))
+    t0 = min(points)
+    p0 = points[t0]
+    if not t0 < t1 or p1 - p0 < MIN_PCT_DELTA:
+        return None
+    usd = sum(w for _r, _p, w in _window_rows(con, t0, t1, root=root, strict_lo=True))
     if usd <= 0:
         return None
-    value = round(usd / (p1 - row["pct"]), 2)
+    value = round(usd / (p1 - p0), 2)
     return value if value > 0 else None
 
 

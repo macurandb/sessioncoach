@@ -108,20 +108,21 @@ each with:
 - `plan` — that plan word, or `null`.
 - `today_usd` — the root's `cost_slices` today.
 - `sessions` — the number of running sessions on that root.
-- `five_hour` / `seven_day` — `pct` and `resets_at` are that root's latest non-null sample of the
-  window in the last 6 h (as `limits` is, but filtered by root); `window_usd` is the list-price USD
+- `five_hour` / `seven_day` — `resets_at` is that root's current window (see *How samples are read*
+  below) and `pct` its highest observed percentage, since the login (as `limits` is, but filtered by
+  root); `window_usd` is the list-price USD
   of that root's `requests` whose `ts` falls in `[resets_at - window, now]` (5 hours, or 7 days);
   `eta` is `limits.pace(...)`. The seven-day window adds `projected_pct` — `pct` extrapolated to the
   full 7 days once at least 6 h of the window have elapsed, else `null`.
 - `usd_per_pct` (each window) — list-price USD that one percentage point of that window costs on
   this account, so the panel can turn "a further turn re-reads X %" into dollars and back. It is
   **not** `window_usd / pct` (that would be wrong when the login switch happened inside the
-  window): it is computed between the earliest sample of the *current* window — the first sample
-  with the same `resets_at`, since the login (`accounts_seen`), and *not* limited to the last 6 h —
-  and the latest sample, as `usd / (p1 − p0)`, where `usd` is the list-price USD of that root's
-  `requests` with `t0 < ts <= t1`. It is `null` when the percentage delta between the two samples is
-  below 5 points (`pct` is a whole number, so a smaller delta is mostly rounding), when nothing was
-  spent in that span, or when there are not two samples.
+  window): it is computed from the first observed point of the *current* window since the login
+  (`accounts_seen`), not limited to the last 6 h (`t0`, `p0`), to the earliest sample that reached
+  the window's current highest percentage (`t1`, `p1`), as `usd / (p1 − p0)`, where `usd` is the
+  list-price USD of that root's `requests` with `t0 < ts <= t1`. It is `null` when the percentage
+  delta is below 5 points (`pct` is a whole number, so a smaller delta is mostly rounding), when
+  nothing was spent in that span, or when there are not two usable points.
 - `groups` — the account's window spend per tenant, as `{"id", "five_hour_usd", "seven_day_usd"}`
   rows. The two windows are exactly the ones `five_hour.window_usd` / `seven_day.window_usd` sum
   over, so the rows add up to them (modulo rounding). Ordered by `seven_day_usd` descending, with
@@ -145,10 +146,25 @@ One object per tenant that has spend or a running session, ordered by `week_usd`
 
 ### `limits`
 
-For each window, the latest `limits_samples` row (from any session) of the last 6 h that reports it:
-the 5-hour and 7-day percentages and reset times, both epoch seconds. A sample can carry one window
-only, so each window is looked up on its own. `null` when neither window has a sample in the last 6 h.
-Both keys are always present; a window the status line did not report has `null` values.
+For each window, the current window across all sessions (see *How samples are read*): its reset time
+and highest observed percentage, both epoch seconds / percent. A sample can carry one window only, so
+each window is looked up on its own. `null` when neither window has a live sample. Both keys are always
+present; a window the status line did not report, or one that has ended, has `null` values.
+
+#### How samples are read
+
+Each running session's status line records the plan limits it last received from the API. A terminal
+app that redraws idle sessions (attaching, resizing) makes them record their *last* response again,
+with a fresh timestamp and an older, lower percentage. Within one window the real percentage never
+goes down, so `live` reads the samples as an envelope instead of trusting the newest row:
+
+- the current window is the greatest reset that is still in the future among the samples of the last
+  6 h (a window whose reset has passed is over and is not reported);
+- its percentage is the highest valid one among all of that window's samples (since the login, for
+  an account), and its time the earliest sample that reached it;
+- the pace (`eta`) starts from the envelope 30 minutes ago — the highest percentage seen up to then;
+- rows written in the same second count as their highest value, samples dated in the future (beyond
+  a 2-minute clock skew) are ignored, and an unusable value (text, NaN, an absurd epoch) is skipped.
 
 ### `sessions`
 

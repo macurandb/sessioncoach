@@ -275,6 +275,45 @@ try {
     { groups: [{ id: "acme", name: "   " }], spaces: { sp1: "acme" } },
     [{ id: "sp1", folder: "/x", machine: false }]), { groups: [{ name: "acme", folders: ["/x"] }] });
 
+  // ---- round 5: corrupt space entries and references never become an empty feed ----
+  const G = { groups: [{ id: "acme", name: "Acme" }], spaces: { s: "acme" } };
+  assert.equal(L.buildSyncPayload(G, [null]), null);
+  assert.equal(L.buildSyncPayload(G, [{ id: 7, folder: "/x" }]), null);            // id not a string
+  assert.equal(L.buildSyncPayload(G, [{ id: "s" }]), null);                         // no folder
+  assert.equal(L.buildSyncPayload(G, [{ id: "s", folder: "/x", machine: 3 }]), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "acme" }], spaces: { s: ["acme"] } }, []), null);  // array ref
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "acme" }], spaces: { s: { id: "acme" } } }, []), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "acme" }], spaces: { s: true } }, []), null);
+  // ids and references share one normalisation: " acme " matches " acme "
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: " acme ", name: "Acme" }], spaces: { s: " acme " } }, [{ id: "s", folder: "/x" }]),
+    { groups: [{ name: "Acme", folders: ["/x"] }] });
+  // the home ("") of this machine is skipped, the other space still syncs
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { h: "acme", s: "acme" } },
+    [{ id: "h", folder: "", machine: null }, { id: "s", folder: "/x", machine: null }]),
+    { groups: [{ name: "Acme", folders: ["/x"] }] });
+  // a valid empty input still clears
+  assert.deepEqual(L.buildSyncPayload({ groups: [], spaces: {} }, []), { groups: [] });
+
+  // ---- syncDecision: the poll's sync step as data ----
+  const P = { groups: [{ name: "Acme", folders: ["/x"] }] };
+  const PT = JSON.stringify(P);
+  assert.deepEqual(L.syncDecision(false, P, null, 1 << 20), { action: "clear" });       // sync off
+  assert.deepEqual(L.syncDecision(true, null, null, 1 << 20), { action: "clear" });     // no usable / corrupt
+  assert.deepEqual(L.syncDecision(true, P, PT, 1 << 20), { action: "clear" });          // back to the applied one
+  assert.deepEqual(L.syncDecision(true, { error: "groups" }, null, 1 << 20), { action: "error", error: "groups" });
+  assert.deepEqual(L.syncDecision(true, P, null, 10), { action: "error", error: "size" });  // too big: no write
+  assert.deepEqual(L.syncDecision(true, P, "older", 1 << 20), { action: "write", text: PT });
+
+  // ---- toast links: two sessions with one id, only one linked -> no link ----
+  const counts = L.sessionIdCounts([{ session_id: "same", pid: 1 }, { session_id: "same", pid: 2 }, { session_id: "x" }, null]);
+  assert.equal(counts.get("same"), 2);
+  assert.equal(counts.get("x"), 1);
+  assert.equal(L.unambiguousLink([{ address: "a" }], counts.get("same")), undefined);
+  assert.deepEqual(L.unambiguousLink([{ address: "a" }], counts.get("x")), { address: "a" });
+  assert.deepEqual(L.unambiguousLink([{ address: "a" }]), { address: "a" });  // old callers: no total
+
   console.log("logic.js ok");
 } finally {
   rmSync(dir, { recursive: true, force: true });

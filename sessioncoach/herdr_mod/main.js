@@ -17,7 +17,7 @@ import {
 } from "herdr";
 import {
   buildSyncPayload, buildActions, weekVerdict, fiveHourWarn, fiveHourWarnText,
-  fmtPct, hhmm, fmtTokens, cacheLeft, usd, usdInt, ppcUsable, unambiguousLink, utf8Bytes,
+  fmtPct, hhmm, fmtTokens, cacheLeft, usd, usdInt, ppcUsable, unambiguousLink, sessionIdCounts, syncDecision,
 } from "./logic.js";
 
 const DEFAULTS = {
@@ -82,6 +82,7 @@ export default class SessionCoach extends View {
     this.firstPoll = true;        // the first poll after this start lists the backlog and toasts nothing
     this.events = [];             // events received, in memory, oldest first
     this.sessionLink = {};        // pid -> { address, space } (a pid is unique)
+    this.sessionIdCount = new Map();    // session_id -> sessions carrying it (linked or not)
     this.sessionLinkBySid = new Map();  // session_id -> [{address, space}, ...] for toast linking
     this.addrPid = new Map();     // agent address -> foreground pid
     this.addrCwd = new Map();     // agent address -> foreground cwd
@@ -205,28 +206,19 @@ export default class SessionCoach extends View {
   // localized line on a real failure — never a raw exception message.
   async syncGroups() {
     const L = this.langTable();
-    if (this.cfg.sync_herdr_groups === false) {
+    const enabled = this.cfg.sync_herdr_groups !== false;
+    const payload = enabled ? buildSyncPayload(shared("space-groups"), spaces()) : null;
+    // readTextFile reads at most 1 MiB, so a larger staging file is never written (syncDecision)
+    const decision = syncDecision(enabled, payload, this.lastAppliedJson, MAX_STAGE_BYTES);
+    if (decision.action === "clear") {
       this.syncError = null;
       return;
     }
-    const payload = buildSyncPayload(shared("space-groups"), spaces());
-    if (payload == null) {  // no usable shared state, or corrupt input: nothing to do
-      this.syncError = null;
+    if (decision.action === "error") {
+      this.syncError = this.syncLimitText(decision.error);
       return;
     }
-    if (payload.error) {  // valid but over sync-herdr's limits: no sync, say why
-      this.syncError = this.syncLimitText(payload.error);
-      return;
-    }
-    const text = JSON.stringify(payload);
-    if (text === this.lastAppliedJson) {  // already applied: nothing to do, no error
-      this.syncError = null;
-      return;
-    }
-    if (utf8Bytes(text) > MAX_STAGE_BYTES) {  // readTextFile reads at most 1 MiB: never write a larger file
-      this.syncError = L.syncTooLarge;
-      return;
-    }
+    const text = decision.text;
     const path = appHome() + SYNC_FILE;
     try {
       await this.stagePayload(path, text);
@@ -255,7 +247,7 @@ export default class SessionCoach extends View {
 
   syncLimitText(code) {
     const L = this.langTable();
-    const map = { groups: L.syncGroups, folders: L.syncFolders, name: L.syncName, path: L.syncPath };
+    const map = { groups: L.syncGroups, folders: L.syncFolders, name: L.syncName, path: L.syncPath, size: L.syncTooLarge };
     return map[code] || (L.syncErr + code);
   }
 
@@ -275,15 +267,21 @@ export default class SessionCoach extends View {
     }
     try {
       await writeTextFile(path, text, expected);
+      return;
+    } catch (e) { /* a stale snapshot: re-read once and retry below */ }
+    try {
+      expected = await readTextFile(path);
     } catch (e) {
-      try {
-        expected = await readTextFile(path);  // a stale snapshot: re-read once and retry
-        await writeTextFile(path, text, expected);
-      } catch (e2) {
-        const err = new Error("could not write the staging file");
-        err.kind = "write";
-        throw err;
-      }
+      const err = new Error("unreadable staging file");
+      err.kind = "read";
+      throw err;
+    }
+    try {
+      await writeTextFile(path, text, expected);
+    } catch (e) {
+      const err = new Error("could not write the staging file");
+      err.kind = "write";
+      throw err;
     }
   }
 
@@ -313,6 +311,7 @@ export default class SessionCoach extends View {
     }
     this.sessionLink = links;
     this.sessionLinkBySid = bySid;
+    this.sessionIdCount = sessionIdCounts(data.sessions);  // all sessions, linked or not
   }
 
   accumulateEvents(events) {
@@ -332,7 +331,8 @@ export default class SessionCoach extends View {
     if (!candidates.length) return;
     for (const e of candidates) {
       const matches = e.session_id != null ? this.sessionLinkBySid.get(e.session_id) : undefined;
-      const link = unambiguousLink(matches);  // ambiguous id (two sessions): no toast link
+      const total = e.session_id != null ? this.sessionIdCount.get(e.session_id) : undefined;
+      const link = unambiguousLink(matches, total);  // two sessions share the id (even one unlinked): no toast link
       notify({
         title: e.title || "",
         body: e.body || "",
