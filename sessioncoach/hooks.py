@@ -39,8 +39,11 @@ class HookSpec:
         return paths.kit_command_str("hook", self.arg, kit_bin=kit_bin)
 
     def is_ours(self, command):
-        """Any format ever written (bin/sessioncoach, bin/kit, `python -m sessioncoach` or `python -m kit`)."""
-        return (" hook %s" % self.arg) in (command or "") and paths.mentions_us(command)
+        """Any format ever written (bin/sessioncoach, bin/kit, `python -m sessioncoach` or `python -m kit`).
+        A command that is not a string (a hand-edited settings.json) is not ours, and never raises."""
+        if not isinstance(command, str):
+            return False
+        return (" hook %s" % self.arg) in command and paths.mentions_us(command)
 
 
 PROMPT = HookSpec("prompt", "UserPromptSubmit", None, ".bak-hook", "nudge", "hook",

@@ -176,13 +176,17 @@ def valid_epoch(v, now=None):
             and EPOCH_MIN <= v <= now + 8 * 86400)
 
 
+ETA_MAX_S = 366 * 86400  # an eta further than a year away is not a date anyone can use
 SKEW_S = 120  # a sample a little ahead of this clock (another process's clock) still counts as observed
 WINDOW_S = {"five": 5 * 3600, "seven": 7 * 86400, "five_hour": 5 * 3600, "seven_day": 7 * 86400}
 
 
-def _observed(ts, now):
+def observed(ts, now):
     """A sample timestamp that has already happened (within SKEW_S)."""
     return valid_epoch(ts, now) and ts <= now + SKEW_S
+
+
+_observed = observed  # the name the readers below use
 
 
 def window_sample(con, window, root=None, since=None, now=None):
@@ -193,7 +197,8 @@ def window_sample(con, window, root=None, since=None, now=None):
     Within one window (the same `*_reset`) the real percentage never decreases, but an idle session's
     redraw re-records its last response with a fresh `ts`, so the newest row flaps and a late row can
     carry a stale low value. The samples of the last `LIMITS_STALE_S` only *discover* the current
-    window: the greatest valid `*_reset` still in the future (a window whose reset has passed is over).
+    window: the greatest valid `*_reset` still in the future and no further away than the window's length
+    (a window whose reset has passed is over; one further away is not a real reset).
     Its pct is then the MAX valid pct over all of that window's samples since `since` (not just the
     last 6 h, so the max cannot drop as it ages), and its ts the earliest sample that reached it. A
     sample whose pct, reset or ts is unusable, or whose ts is in the future, is skipped."""
@@ -205,7 +210,7 @@ def window_sample(con, window, root=None, since=None, now=None):
                          "AND %s IS NOT NULL AND ts >= ?%s" % (pct_col, reset_col, pct_col, reset_col, scope),
                          [max(now - LIMITS_STALE_S, since or 0), *extra]):
         if (_observed(r["ts"], now) and valid_pct(r["pct"]) and valid_epoch(r["reset"], now)
-                and r["reset"] > now and (best_reset is None or r["reset"] > best_reset)):
+                and now < r["reset"] <= now + WINDOW_S[window] and (best_reset is None or r["reset"] > best_reset)):
             best_reset = r["reset"]
     if best_reset is None:
         return None, None, None
@@ -283,7 +288,9 @@ def pace(con, window, resets_at, now, pct, root=None, since=None):
         eta = now + (100 - p_now) / rate
     except (OverflowError, ZeroDivisionError):
         return None
-    return int(eta) if _finite(eta) else None
+    if not (_finite(eta) and eta <= now + ETA_MAX_S):  # a finite but absurd date is no eta either
+        return None
+    return int(eta)
 
 
 def record_and_alert(con, data, now=None, cfg=None, root=None):

@@ -100,7 +100,8 @@ try {
   assert.equal(L.unambiguousLink(null), undefined);
   assert.equal(L.unambiguousLink([]), undefined);
   assert.equal(L.unambiguousLink([{ address: "a" }, { address: "b" }]), undefined);  // two sessions, one id
-  assert.deepEqual(L.unambiguousLink([{ address: "a" }]), { address: "a" });
+  assert.deepEqual(L.unambiguousLink([{ address: "a" }], 1), { address: "a" });
+  assert.equal(L.unambiguousLink([{ address: "a" }, { address: "b" }], 1), undefined);
 
   // ---- utf8Bytes: the staging payload's size in bytes ----
   assert.equal(L.utf8Bytes(""), 0);
@@ -207,18 +208,18 @@ try {
   // a space pointing at a group id that does not exist is corrupt -> null
   assert.equal(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "ghost" } },
-    [{ id: "sp1", folder: "/home/you/a", machine: false }]), null);
+    [{ id: "sp1", folder: "/home/you/a", machine: null }]), null);
   // a local space with a non-absolute folder is corrupt -> null
   assert.equal(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
-    [{ id: "sp1", folder: "relative/path", machine: false }]), null);
+    [{ id: "sp1", folder: "relative/path", machine: null }]), null);
 
   const payload = L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }, { id: "globex", name: "Globex" }],
       spaces: { sp1: "acme", sp3: "globex" } },
-    [{ id: "sp1", folder: "/home/you/a", machine: false },
-     { id: "sp3", folder: "C:\\work\\g", machine: false },
-     { id: "sp4", folder: "/home/you/remote", machine: true }], // remote machine: skipped
+    [{ id: "sp1", folder: "/home/you/a", machine: null },
+     { id: "sp3", folder: "C:\\work\\g", machine: null },
+     { id: "sp4", folder: "/home/you/remote", machine: "remote" }], // remote machine: skipped
   );
   assert.deepEqual(payload, { groups: [{ name: "Acme", folders: ["/home/you/a"] },
                                         { name: "Globex", folders: ["C:\\work\\g"] }] });
@@ -229,21 +230,21 @@ try {
   for (let i = 0; i < 201; i++) {
     manyGroups.push({ id: "g" + i, name: "G" + i });
     manyGroupSpaces["sp" + i] = "g" + i;
-    manyGroupList.push({ id: "sp" + i, folder: "/f" + i, machine: false });
+    manyGroupList.push({ id: "sp" + i, folder: "/f" + i, machine: null });
   }
   assert.deepEqual(L.buildSyncPayload({ groups: manyGroups, spaces: manyGroupSpaces }, manyGroupList), { error: "groups" });
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "A".repeat(101) }], spaces: { sp1: "acme" } },
-    [{ id: "sp1", folder: "/x", machine: false }]), { error: "name" });
+    [{ id: "sp1", folder: "/x", machine: null }]), { error: "name" });
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
-    [{ id: "sp1", folder: "/" + "x".repeat(4096), machine: false }]), { error: "path" });
+    [{ id: "sp1", folder: "/" + "x".repeat(4096), machine: null }]), { error: "path" });
   const manyFolders = Array.from({ length: 1001 }, (_, i) => "/f" + i);
   const manySpaces = {};
   manyFolders.forEach((f, i) => { manySpaces["sp" + i] = "acme"; });
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: manySpaces },
-    manyFolders.map((f, i) => ({ id: "sp" + i, folder: f, machine: false }))), { error: "folders" });
+    manyFolders.map((f, i) => ({ id: "sp" + i, folder: f, machine: null }))), { error: "folders" });
 
   // ---- spacesList not an array -> null ----
   assert.equal(L.buildSyncPayload({ groups: [], spaces: {} }, null), null);
@@ -252,11 +253,11 @@ try {
   // ---- every spaces entry must reference an existing group, even a space not in the local list ----
   assert.equal(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { remote: "ghost" } },
-    [{ id: "sp1", folder: "/x", machine: false }]), null);
+    [{ id: "sp1", folder: "/x", machine: null }]), null);
   // ... a non-null value of any type that is not a group id is corrupt
   assert.equal(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: 3 } },
-    [{ id: "sp1", folder: "/x", machine: false }]), null);
+    [{ id: "sp1", folder: "/x", machine: null }]), null);
 
   // ---- group ids: empty after trim, non-finite number, duplicate after normalising ----
   assert.equal(L.buildSyncPayload({ groups: [{ id: "  ", name: "Acme" }], spaces: {} }, []), null);
@@ -268,12 +269,12 @@ try {
   // ---- UNC folders are absolute; a final name that trims empty falls back to the (valid) id ----
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "Acme" }], spaces: { sp1: "acme" } },
-    [{ id: "sp1", folder: "\\\\server\\share\\work", machine: false }]),
+    [{ id: "sp1", folder: "\\\\server\\share\\work", machine: null }]),
     { groups: [{ name: "Acme", folders: ["\\\\server\\share\\work"] }] });
   // a group whose name is only whitespace keeps its id as the name
   assert.deepEqual(L.buildSyncPayload(
     { groups: [{ id: "acme", name: "   " }], spaces: { sp1: "acme" } },
-    [{ id: "sp1", folder: "/x", machine: false }]), { groups: [{ name: "acme", folders: ["/x"] }] });
+    [{ id: "sp1", folder: "/x", machine: null }]), { groups: [{ name: "acme", folders: ["/x"] }] });
 
   // ---- round 5: corrupt space entries and references never become an empty feed ----
   const G = { groups: [{ id: "acme", name: "Acme" }], spaces: { s: "acme" } };
@@ -312,7 +313,15 @@ try {
   assert.equal(counts.get("x"), 1);
   assert.equal(L.unambiguousLink([{ address: "a" }], counts.get("same")), undefined);
   assert.deepEqual(L.unambiguousLink([{ address: "a" }], counts.get("x")), { address: "a" });
-  assert.deepEqual(L.unambiguousLink([{ address: "a" }]), { address: "a" });  // old callers: no total
+  assert.equal(L.unambiguousLink([{ address: "a" }]), undefined);  // no count given: never guess
+  // round 6: machine must be null/absent or a string; a blank space id is corrupt; null refs mean unassigned
+  assert.equal(L.buildSyncPayload(G, [{ id: "s", folder: "/x", machine: true }]), null);
+  assert.equal(L.buildSyncPayload(G, [{ id: "s", folder: "/x", machine: false }]), null);
+  assert.equal(L.buildSyncPayload({ groups: [{ id: "acme" }], spaces: { s: "acme" } }, [{ id: "   ", folder: "/x" }]), null);
+  assert.deepEqual(L.buildSyncPayload(
+    { groups: [{ id: "acme", name: "Acme" }], spaces: { s: null, t: "acme" } },
+    [{ id: "s", folder: "/y" }, { id: "t", folder: "/x" }]),
+    { groups: [{ name: "Acme", folders: ["/x"] }] });  // s: null is an unassigned space, not corruption
 
   console.log("logic.js ok");
 } finally {

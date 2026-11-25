@@ -442,7 +442,6 @@ class StaleSamples(Base):
         self.assertIsNotNone(a["five_hour"]["eta"])  # a real rise still projects
 
 
-
 class EnvelopeEdges(Base):
     """Round 5 of QA: same-second rows, the 6 h discovery boundary, ended windows, future samples,
     unusable latest values and arithmetic that would overflow."""
@@ -523,9 +522,27 @@ class EnvelopeEdges(Base):
         eta = limits.pace(self.con, "seven_day", self.reset, NOW, 52, root=self.ra)
         self.assertEqual(eta, int(NOW + 48 / (2 / 1200)))  # from the 50 at NOW-1200, not the out-of-window 1
 
+    def test_usd_per_pct_needs_a_t1_that_happened(self):
+        self.sample(self.con, self.ra, NOW - 3600, seven_pct=10, seven_reset=self.reset)
+        self.request(self.con, self.ra, NOW - 3000)
+        future = {"reset": self.reset, "pct": 50, "ts": NOW + 86400}
+        self.assertIsNone(live._usd_per_pct(self.con, self.ra, "seven", future, now=NOW))
+        within_skew = {"reset": self.reset, "pct": 50, "ts": NOW + 60}
+        self.assertIsNotNone(live._usd_per_pct(self.con, self.ra, "seven", within_skew, now=NOW))
+
+    def test_a_reset_beyond_the_window_length_is_not_current(self):
+        self.sample(self.con, self.ra, NOW - 60, five_pct=10, five_reset=NOW + 8 * 86400)
+        self.assertEqual(limits.window_sample(self.con, "five", root=self.ra, now=NOW), (None, None, None))
+
+    def test_an_absurd_eta_is_none(self):
+        self.sample(self.con, self.ra, NOW - 1200, seven_pct=0, seven_reset=self.reset)
+        self.sample(self.con, self.ra, NOW - 60, seven_pct=1e-300, seven_reset=self.reset)
+        self.assertIsNone(limits.pace(self.con, "seven_day", self.reset, NOW, 1e-300, root=self.ra))
+
     def test_validators_never_raise_on_huge_ints(self):
         self.assertFalse(limits.valid_pct(10 ** 1000))
         self.assertFalse(limits.valid_epoch(10 ** 1000, NOW))
+
 
 class Demo(unittest.TestCase):
     def test_demo_has_the_new_fields_and_neutral_names(self):

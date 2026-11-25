@@ -17,14 +17,15 @@ removal or a change of meaning bumps the version):
         {"pid": 30313, "session_id": "...", "cwd": "/abs/path", "project": "label", "status": "busy",
          "account": "personal", "account_id": "1f8ab3c9d0e2", "group": "acme",
          "model": "claude-opus-5-5", "context_tokens": 335000, "last_activity": 1795530900,
-         "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70,
-         "today_usd": 12.40, "source": "transcript", "match": "pid"}
+         "cache_ttl_s": 3600, "cache_expires_at": 1795534500, "rewrite_usd": 6.70, "turn_usd": 0.17,
+         "today_usd": 12.40, "clear_handoff": true, "source": "transcript", "match": "pid"}
       ],
       "accounts": [
         {"id": "1f8ab3c9d0e2", "key": "personal", "label": "Personal · Max", "plan": "Max", "today_usd": 12.40, "sessions": 2,
-         "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "eta": null},
-         "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "eta": null,
-                       "projected_pct": 78.0}}
+         "five_hour": {"pct": 12.0, "resets_at": 1795543800, "window_usd": 18.0, "usd_per_pct": null, "eta": null},
+         "seven_day": {"pct": 51.0, "resets_at": 1795737600, "window_usd": 1535.0, "usd_per_pct": 30.1,
+                       "eta": null, "projected_pct": 78.0},
+         "groups": [{"id": "acme", "five_hour_usd": 6.0, "seven_day_usd": 900.0}]}
       ],
       "groups": [
         {"id": "acme", "label": "Acme", "today_usd": 10.0, "five_hour_usd": 6.0,
@@ -36,6 +37,8 @@ removal or a change of meaning bumps the version):
       ],
       "cursor": 1234
     }
+
+Every field is described in docs/live-json.md.
 
 Privacy: from each ``sessions/<pid>.json`` only ``pid``, ``sessionId``, ``cwd``, ``status``,
 ``updatedAt`` and ``procStart`` are read (the ``*.key`` files are never opened). From a
@@ -532,7 +535,7 @@ def _usd_per_pct(con, root, window, latest, since=None, now=None):
     delta is mostly rounding), nothing was spent, or the rounded result is not > 0."""
     now = int(now if now is not None else time.time())
     reset, p1, t1 = latest.get("reset"), latest.get("pct"), latest.get("ts")
-    if not (limits.valid_epoch(reset, now) and limits.valid_epoch(t1, now) and limits.valid_pct(p1)):
+    if not (limits.valid_epoch(reset, now) and limits.observed(t1, now) and limits.valid_pct(p1)):
         return None
     lo = max(since or 0, reset - limits.WINDOW_S[window])
     points = limits.envelope_points(con, window, reset, lo, t1, now, root=root)

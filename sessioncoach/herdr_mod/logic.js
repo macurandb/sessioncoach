@@ -223,7 +223,7 @@ export function buildActions(view, hintMinTokens) {
 // A toast/event links to a terminal only when its session_id names exactly one linked session:
 // two sessions sharing an id are ambiguous, so clicking could focus the wrong terminal.
 export function unambiguousLink(matches, total) {
-  if (total !== undefined && total !== 1) return undefined;  // another session shares this id, linked or not
+  if (total !== 1) return undefined;  // another session shares this id (linked or not), or no count was given
   return Array.isArray(matches) && matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -261,10 +261,11 @@ export function normGroupId(v) {
 }
 
 // A Herdr space entry the sync can trust: an object with a string id, a string folder ("" is that
-// machine's home) and a machine that is absent, null, a boolean or a string (truthy: a remote machine).
+// machine's home) and a machine that is absent or null (this computer) or a non-empty string (another
+// machine), as Herdr's SpaceInfo has it. An empty id or any other machine value is corrupt.
 function validSpace(sp) {
   return sp != null && typeof sp === "object" && !Array.isArray(sp) && typeof sp.id === "string"
-    && typeof sp.folder === "string" && (sp.machine == null || typeof sp.machine === "boolean" || typeof sp.machine === "string");
+    && sp.id.trim() !== "" && typeof sp.folder === "string" && (sp.machine == null || typeof sp.machine === "string");
 }
 
 // Build the `group sync-herdr` payload from the herdr-space-groups shared value and the local
@@ -298,7 +299,7 @@ export function buildSyncPayload(spaceGroups, spacesList) {
   for (const sp of spacesList) if (!validSpace(sp)) return null;
   const folders = new Map();
   for (const sp of spacesList) {
-    if (sp.machine) continue;  // local machine only
+    if (typeof sp.machine === "string" && sp.machine !== "") continue;  // local machine only
     const gid = spaceGroups.spaces[sp.id];
     if (gid == null) continue;  // a space assigned to no group
     if (sp.folder === "") continue;  // the machine's home: sync-herdr omits it
@@ -324,7 +325,8 @@ export function buildSyncPayload(spaceGroups, spacesList) {
 }
 
 // What the panel does with one poll's sync input, as data: "clear" (nothing to do, and any old error
-// line goes: sync off, no usable or a corrupt payload, or the payload already applied), "error" (no
+// line goes: sync off, no usable or a corrupt payload, or the payload already applied — an absent and
+// a corrupt feed are deliberately the same: nothing is synced and nothing stale is shown), "error" (no
 // write, show `error`: over sync-herdr's limits, or a staging file too large to read back) or "write"
 // (stage `text` and run sync-herdr).
 export function syncDecision(enabled, payload, lastApplied, maxBytes) {
